@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-
+ 
   var CATEGORIES = [
     { id: 'sound', label: '音響', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>' },
     { id: 'network', label: '網路', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16.3a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></svg>' },
@@ -10,13 +10,13 @@
   ];
   var CAT_MAP = {};
   CATEGORIES.forEach(function (c) { CAT_MAP[c.id] = c; });
-
+ 
   var STATUS_ORDER = ['pending', 'in_progress', 'done'];
   var STATUS_LABEL = { pending: '待處理', in_progress: '處理中', done: '已完成' };
-
+ 
   var state = { venueName: '活動場地', rooms: [], requests: [] };
   var app = document.getElementById('app');
-
+ 
   var selectedCategory = null;
   var confirmingDelete = {};
   var settingsOpen = false;
@@ -24,13 +24,13 @@
   var qrModalRoom = null;
   var submitting = false;
   var connected = false;
-
+ 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-
+ 
   function showToast(msg) {
     var old = document.querySelector('.toast');
     if (old) old.remove();
@@ -40,7 +40,7 @@
     document.body.appendChild(t);
     setTimeout(function () { t.remove(); }, 2600);
   }
-
+ 
   function api(method, url, body) {
     return fetch(url, {
       method: method,
@@ -55,12 +55,12 @@
       return res.json();
     });
   }
-
+ 
   function applyState(s) {
     state = s;
     render();
   }
-
+ 
   function elapsedText(ts) {
     var diff = Math.max(0, Date.now() - ts);
     var m = Math.floor(diff / 60000);
@@ -69,6 +69,17 @@
     var h = Math.floor(m / 60);
     if (h < 24) return h + ' 小時前';
     return Math.floor(h / 24) + ' 天前';
+  }
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+  function formatDateTime(ts) {
+    var d = new Date(ts);
+    return d.getFullYear() + '/' + pad2(d.getMonth() + 1) + '/' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+  function durationText(startTs, endTs) {
+    var mins = Math.max(0, Math.round((endTs - startTs) / 60000));
+    if (mins < 60) return mins + ' 分鐘';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return h + ' 小時' + (m ? m + ' 分鐘' : '');
   }
   function ageClass(ts, status) {
     if (status !== 'pending') return '';
@@ -81,7 +92,7 @@
     var d = new Date(ts), n = new Date();
     return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
   }
-
+ 
   function currentView() {
     var params = new URLSearchParams(location.search);
     var roomId = params.get('room');
@@ -91,11 +102,11 @@
     }
     return { type: 'staff' };
   }
-
+ 
   function roomUrl(roomId) {
     return location.origin + '/?room=' + encodeURIComponent(roomId);
   }
-
+ 
   function setSyncIndicator() {
     var dot = document.getElementById('sync-dot');
     var label = document.getElementById('sync-label');
@@ -105,17 +116,17 @@
     else if (!connected) { dot.classList.add('is-off'); label.textContent = '連線中斷，正在重新連線…'; }
     else { label.textContent = '即時同步中'; }
   }
-
+ 
   /* ---------------- client view ---------------- */
   function renderClient(room) {
     var mine = state.requests.filter(function (r) { return r.roomId === room.id; })
       .sort(function (a, b) { return b.createdAt - a.createdAt; }).slice(0, 6);
-
+ 
     var catGrid = CATEGORIES.map(function (c) {
       var pressed = selectedCategory === c.id;
       return '<button type="button" class="cat-btn" data-cat="' + c.id + '" aria-pressed="' + pressed + '">' + c.icon + '<span>' + esc(c.label) + '</span></button>';
     }).join('');
-
+ 
     var needsNote = selectedCategory === 'other';
     var myList = mine.length ? mine.map(function (r) {
       var c = CAT_MAP[r.category] || CAT_MAP.other;
@@ -126,7 +137,7 @@
         '<div style="text-align:right"><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span>' +
         '<div class="req-time">' + elapsedText(r.createdAt) + '</div></div></div>';
     }).join('') : '';
-
+ 
     app.innerHTML =
       '<div class="shell shell--narrow">' +
         '<div class="room-head"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1><p style="color:var(--ink-soft);font-size:.9rem;margin-top:6px;">需要協助嗎？選擇項目後送出，工作人員會盡快為您服務。</p></div>' +
@@ -137,7 +148,7 @@
         (mine.length ? '<div class="my-requests"><h2>本場地最近的請求</h2>' + myList + '</div>' : '') +
         '<div class="sync" style="justify-content:center;margin-top:22px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
       '</div>';
-
+ 
     app.querySelectorAll('.cat-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         selectedCategory = btn.getAttribute('data-cat');
@@ -166,12 +177,12 @@
     });
     setSyncIndicator();
   }
-
+ 
   /* ---------------- staff view ---------------- */
   function tabBtn(id, label) {
     return '<button type="button" class="tab" data-tab="' + id + '" aria-selected="' + (activeTab === id) + '">' + label + '</button>';
   }
-
+ 
   function renderReqCard(r) {
     var c = CAT_MAP[r.category] || CAT_MAP.other;
     var cls = ageClass(r.createdAt, r.status);
@@ -184,12 +195,14 @@
       '<div class="req-body">' +
         '<div class="req-top"><span class="room-name">' + esc(r.roomName) + '</span><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span></div>' +
         '<div style="color:var(--ink-soft);font-size:.88rem;margin-top:2px;">' + esc(c.label) + (r.note ? '　·　' + esc(r.note) : '') + '</div>' +
-        '<div class="req-meta"><span class="age-tag">' + (r.status === 'done' ? '完成於 ' + elapsedText(r.updatedAt) : elapsedText(r.createdAt)) + '</span></div>' +
+        '<div class="req-meta"><span class="age-tag">報修 ' + formatDateTime(r.createdAt) + '（' + elapsedText(r.createdAt) + '）</span>' +
+        (r.status === 'done' ? '<span class="age-tag">結案 ' + formatDateTime(r.updatedAt) + '　·　耗時 ' + durationText(r.createdAt, r.updatedAt) + '</span>' : '') +
+        '</div>' +
       '</div>' +
       '<div class="req-actions">' + actions + '</div>' +
     '</div>';
   }
-
+ 
   function renderSettings() {
     var rows = state.rooms.map(function (r) {
       var url = roomUrl(r.id);
@@ -212,7 +225,7 @@
       '<div class="add-room"><input id="new-room-name" placeholder="新場地名稱，例如：3樓 A廳"><button type="button" class="btn btn--accent" data-action="add-room">新增場地</button></div>' +
     '</div>';
   }
-
+ 
   function renderQrModal() {
     var r = qrModalRoom;
     return '<div class="modal-overlay"><div class="modal">' +
@@ -226,7 +239,7 @@
       '</div>' +
     '</div></div>';
   }
-
+ 
   function setupQr(room) {
     var holder = document.getElementById('qr-holder');
     if (!holder) return;
@@ -239,7 +252,7 @@
     var overlay = document.querySelector('.modal-overlay');
     if (overlay) overlay.addEventListener('click', function (e) { if (e.target === overlay) { qrModalRoom = null; renderStaff(); } });
   }
-
+ 
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { showToast('已複製連結'); }).catch(function () { showToast(text); });
@@ -247,7 +260,7 @@
       showToast(text);
     }
   }
-
+ 
   function mutate(promise) {
     submitting = true;
     render();
@@ -257,7 +270,7 @@
       showToast(err.message || '操作失敗，請稍後再試');
     });
   }
-
+ 
   function handleStaffAction(el) {
     var action = el.getAttribute('data-action') || el.getAttribute('data-onchange');
     if (action === 'advance') {
@@ -293,27 +306,27 @@
       mutate(api('POST', '/api/rooms', { name: val2 }));
     }
   }
-
+ 
   function renderStaff() {
     var all = state.requests;
     var pending = all.filter(function (r) { return r.status === 'pending'; });
     var inProgress = all.filter(function (r) { return r.status === 'in_progress'; });
     var doneToday = all.filter(function (r) { return r.status === 'done' && isToday(r.updatedAt); });
-
+ 
     var listSource;
     if (activeTab === 'active') listSource = pending.concat(inProgress);
     else if (activeTab === 'pending') listSource = pending;
     else if (activeTab === 'in_progress') listSource = inProgress;
     else listSource = all.filter(function (r) { return r.status === 'done'; });
-
+ 
     listSource = listSource.slice().sort(function (a, b) {
       if (a.status !== b.status) return STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status);
       return a.status === 'done' ? b.updatedAt - a.updatedAt : a.createdAt - b.createdAt;
     });
-
+ 
     var emptyLabel = activeTab === 'in_progress' ? '處理中的' : activeTab === 'pending' ? '待處理的' : activeTab === 'done' ? '已完成的' : '待處理或處理中的';
     var cards = listSource.length ? listSource.map(renderReqCard).join('') : '<div class="empty card">目前沒有' + emptyLabel + '請求</div>';
-
+ 
     app.innerHTML =
       '<div class="shell">' +
         '<div class="topbar">' +
@@ -333,7 +346,7 @@
         (settingsOpen ? renderSettings() : '') +
       '</div>' +
       (qrModalRoom ? renderQrModal() : '');
-
+ 
     app.querySelectorAll('.tab').forEach(function (btn) {
       btn.addEventListener('click', function () { activeTab = btn.getAttribute('data-tab'); renderStaff(); });
     });
@@ -348,7 +361,7 @@
     if (qrModalRoom) setupQr(qrModalRoom);
     setSyncIndicator();
   }
-
+ 
   function render() {
     var view = currentView();
     if (view.type === 'client') renderClient(view.room);
@@ -357,7 +370,7 @@
       app.innerHTML = '<div class="invalid-wrap"><div><h1 style="font-size:1.3rem;margin-bottom:8px;">找不到此場地連結</h1><p>請確認連結是否正確，或聯絡工作人員協助。</p></div></div>';
     }
   }
-
+ 
   function boot() {
     fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
       state = s;
@@ -366,18 +379,19 @@
       render();
       showToast('無法連線到伺服器，請稍後重新整理');
     });
-
+ 
     if (window.io) {
       var socket = window.io();
       socket.on('connect', function () { connected = true; setSyncIndicator(); });
       socket.on('disconnect', function () { connected = false; setSyncIndicator(); });
       socket.on('state', function (s) { applyState(s); });
     }
-
+ 
     setInterval(function () {
       if (!settingsOpen && !qrModalRoom) render();
     }, 30000);
   }
-
+ 
   boot();
 })();
+ 
