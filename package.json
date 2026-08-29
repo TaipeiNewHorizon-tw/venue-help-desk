@@ -1,0 +1,17 @@
+{
+  "name": "venue-help-desk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "場地即時協助系統 - 客戶掃碼求助 + 工作人員即時儀表板",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
