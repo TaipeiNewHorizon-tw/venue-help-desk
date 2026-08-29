@@ -1,3 +1,4 @@
+
 (function () {
   'use strict';
  
@@ -14,7 +15,7 @@
   var STATUS_ORDER = ['pending', 'in_progress', 'done'];
   var STATUS_LABEL = { pending: '待處理', in_progress: '處理中', done: '已完成' };
  
-  var state = { venueName: '活動場地', rooms: [], requests: [] };
+  var state = { venueName: '活動場地', rooms: [], requests: [], serviceHours: { start: '08:00', end: '23:59' } };
   var app = document.getElementById('app');
  
   var selectedCategory = null;
@@ -92,6 +93,23 @@
     var d = new Date(ts), n = new Date();
     return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
   }
+  function minutesFromHHMM(s) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(s || ''));
+    if (!m) return null;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+  // Uses the visitor's own device clock — fine here since clients are
+  // physically at the venue, so device local time is Taipei time. The
+  // server independently re-checks using Asia/Taipei time regardless.
+  function isServiceOpen() {
+    var sh = state.serviceHours || { start: '08:00', end: '23:59' };
+    var startM = minutesFromHHMM(sh.start), endM = minutesFromHHMM(sh.end);
+    if (startM == null || endM == null) return true;
+    var d = new Date();
+    var nowM = d.getHours() * 60 + d.getMinutes();
+    if (startM <= endM) return nowM >= startM && nowM <= endM;
+    return nowM >= startM || nowM <= endM;
+  }
  
   function currentView() {
     var params = new URLSearchParams(location.search);
@@ -119,8 +137,13 @@
  
   /* ---------------- client view ---------------- */
   function renderClient(room) {
-    var mine = state.requests.filter(function (r) { return r.roomId === room.id; })
+    // Only today's own requests — so a new day's renter never sees a
+    // previous company's history on what looks like "their" room page.
+    var mine = state.requests.filter(function (r) { return r.roomId === room.id && isToday(r.createdAt); })
       .sort(function (a, b) { return b.createdAt - a.createdAt; }).slice(0, 6);
+ 
+    var open = isServiceOpen();
+    var sh = state.serviceHours || { start: '08:00', end: '23:59' };
  
     var catGrid = CATEGORIES.map(function (c) {
       var pressed = selectedCategory === c.id;
@@ -138,14 +161,18 @@
         '<div class="req-time">' + elapsedText(r.createdAt) + '</div></div></div>';
     }).join('') : '';
  
+    var formHtml = open ?
+      ('<div class="cat-grid">' + catGrid + '</div>' +
+        '<label class="field-label" for="note-input">補充說明' + (needsNote ? '（請簡述問題）' : '（選填）') + '</label>' +
+        '<textarea id="note-input" rows="3" maxlength="300" placeholder="' + (needsNote ? '請簡短描述您需要的協助…' : '若有其他細節，可在此補充…') + '"></textarea>' +
+        '<button type="button" class="submit-btn" id="submit-btn"' + (submitting ? ' disabled' : '') + '>' + (submitting ? '送出中…' : '送出求助') + '</button>')
+      : ('<div class="banner banner--info" style="margin-top:14px;">目前非服務時段(開放時間 ' + esc(sh.start) + '–' + esc(sh.end) + '),暫時無法送出新的求助,如有緊急狀況請直接聯絡工作人員。</div>');
+ 
     app.innerHTML =
       '<div class="shell shell--narrow">' +
         '<div class="room-head"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1><p style="color:var(--ink-soft);font-size:.9rem;margin-top:6px;">需要協助嗎？選擇項目後送出，工作人員會盡快為您服務。</p></div>' +
-        '<div class="cat-grid">' + catGrid + '</div>' +
-        '<label class="field-label" for="note-input">補充說明' + (needsNote ? '（請簡述問題）' : '（選填）') + '</label>' +
-        '<textarea id="note-input" rows="3" maxlength="300" placeholder="' + (needsNote ? '請簡短描述您需要的協助…' : '若有其他細節，可在此補充…') + '"></textarea>' +
-        '<button type="button" class="submit-btn" id="submit-btn"' + (submitting ? ' disabled' : '') + '>' + (submitting ? '送出中…' : '送出求助') + '</button>' +
-        (mine.length ? '<div class="my-requests"><h2>本場地最近的請求</h2>' + myList + '</div>' : '') +
+        formHtml +
+        (mine.length ? '<div class="my-requests"><h2>本場地今天的請求</h2>' + myList + '</div>' : '') +
         '<div class="sync" style="justify-content:center;margin-top:22px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
       '</div>';
  
@@ -216,11 +243,19 @@
         '<button type="button" class="btn ' + (deleting ? 'btn--danger' : 'btn--ghost') + '" data-action="delete-room" data-id="' + r.id + '">' + (deleting ? '確定刪除？' : '刪除') + '</button>' +
       '</div>';
     }).join('');
+    var sh = state.serviceHours || { start: '08:00', end: '23:59' };
     return '<div class="card settings-panel">' +
       '<h2>場地設定</h2>' +
       '<p class="settings-sub">為每個場地產生專屬連結／QR code，張貼於場地內供客戶掃描求助。</p>' +
       '<label class="field-label">園區／場地總稱</label>' +
       '<input value="' + esc(state.venueName) + '" data-onchange="rename-venue" style="max-width:280px;">' +
+      '<label class="field-label">求助服務時段(超過此時段，求助頁面暫停送出，避免舊連結在租借結束後仍被誤用)</label>' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<input type="time" value="' + esc(sh.start) + '" data-onchange="service-start" style="max-width:140px;">' +
+        '<span style="color:var(--ink-soft);">至</span>' +
+        '<input type="time" value="' + esc(sh.end) + '" data-onchange="service-end" style="max-width:140px;">' +
+        '<span style="color:var(--ink-faint);font-size:.78rem;">(結束時間設為 23:59 代表開放到當天午夜)</span>' +
+      '</div>' +
       '<div style="margin-top:16px;">' + rows + '</div>' +
       '<div class="add-room"><input id="new-room-name" placeholder="新場地名稱，例如：3樓 A廳"><button type="button" class="btn btn--accent" data-action="add-room">新增場地</button></div>' +
     '</div>';
@@ -278,6 +313,12 @@
       mutate(api('PATCH', '/api/requests/' + encodeURIComponent(id), { status: to }));
     } else if (action === 'rename-venue') {
       mutate(api('PATCH', '/api/venue', { name: el.value.trim().slice(0, 60) || '活動場地' }));
+    } else if (action === 'service-start' || action === 'service-end') {
+      var curSh = state.serviceHours || { start: '08:00', end: '23:59' };
+      var startVal = action === 'service-start' ? el.value : curSh.start;
+      var endVal = action === 'service-end' ? el.value : curSh.end;
+      if (!startVal || !endVal) return;
+      mutate(api('PATCH', '/api/service-hours', { start: startVal, end: endVal }));
     } else if (action === 'rename-room') {
       var val = el.value.trim().slice(0, 40);
       if (val) mutate(api('PATCH', '/api/rooms/' + encodeURIComponent(el.getAttribute('data-id')), { name: val }));
