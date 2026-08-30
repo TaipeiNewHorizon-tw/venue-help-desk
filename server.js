@@ -11,6 +11,10 @@ const PORT = process.env.PORT || 3000;
 // survives redeploys. Falls back to a local folder for quick local testing.
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
+// Completed requests that age out of the live dashboard get archived here
+// instead of being thrown away, so history stays available for later
+// date/category analysis without bloating the live state file.
+const ARCHIVE_FILE = path.join(DATA_DIR, 'archive.db');
  
 const STATUS_ORDER = ['pending', 'in_progress', 'done'];
 const DAY = 86400000;
@@ -99,6 +103,67 @@ function persist() {
   }, 150);
 }
  
+// --- archive: completed requests that would otherwise be deleted by
+// prune() are saved here first, in a small SQLite file on the same
+// Volume as state.json (so it survives redeploys too). Kept separate
+// from the live JSON state so the dashboard never has to read/write
+// archived history — this file is only ever appended to. If SQLite
+// fails to initialise for any reason, the app logs it and keeps
+// running without archiving (same behaviour as before this feature).
+let archiveDb = null;
+let archiveInsertStmt = null;
+try {
+  const Database = require('better-sqlite3');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  archiveDb = new Database(ARCHIVE_FILE);
+  archiveDb.pragma('journal_mode = WAL');
+  archiveDb.exec(
+    'CREATE TABLE IF NOT EXISTS archived_requests (' +
+    'id TEXT PRIMARY KEY, ' +
+    'room_id TEXT, room_name TEXT, ' +
+    'category TEXT, category_label TEXT, category_icon TEXT, ' +
+    'note TEXT, status TEXT, ' +
+    'created_at INTEGER, updated_at INTEGER, archived_at INTEGER)'
+  );
+  archiveDb.exec('CREATE INDEX IF NOT EXISTS idx_archived_created_at ON archived_requests(created_at)');
+  archiveDb.exec('CREATE INDEX IF NOT EXISTS idx_archived_category ON archived_requests(category)');
+  archiveInsertStmt = archiveDb.prepare(
+    'INSERT OR REPLACE INTO archived_requests ' +
+    '(id, room_id, room_name, category, category_label, category_icon, note, status, created_at, updated_at, archived_at) ' +
+    'VALUES (@id, @roomId, @roomName, @category, @categoryLabel, @categoryIcon, @note, @status, @createdAt, @updatedAt, @archivedAt)'
+  );
+  console.log('[archive] SQLite archive ready: ' + ARCHIVE_FILE);
+} catch (e) {
+  console.error('[archive] disabled — could not initialise SQLite archive:', e.message);
+}
+ 
+function archiveRequests(list) {
+  if (!archiveInsertStmt || !list.length) return;
+  const archivedAt = Date.now();
+  try {
+    const insertMany = archiveDb.transaction(function (rows) {
+      rows.forEach(function (r) {
+        archiveInsertStmt.run({
+          id: r.id,
+          roomId: r.roomId,
+          roomName: r.roomName,
+          category: r.category,
+          categoryLabel: r.categoryLabel || r.category,
+          categoryIcon: r.categoryIcon || 'other',
+          note: r.note || '',
+          status: r.status,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          archivedAt: archivedAt,
+        });
+      });
+    });
+    insertMany(list);
+  } catch (e) {
+    console.error('[archive] failed to archive ' + list.length + ' request(s):', e.message);
+  }
+}
+ 
 function prune() {
   const now = Date.now();
   const done = [];
@@ -107,7 +172,13 @@ function prune() {
     (r.status === 'done' ? done : others).push(r);
   });
   done.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
-  const keptDone = done.filter(function (r, i) { return i < 150 && (now - r.updatedAt) < 7 * DAY; });
+  const keptDone = [];
+  const toArchive = [];
+  done.forEach(function (r, i) {
+    if (i < 150 && (now - r.updatedAt) < 7 * DAY) keptDone.push(r);
+    else toArchive.push(r);
+  });
+  if (toArchive.length) archiveRequests(toArchive);
   state.requests = others.concat(keptDone);
 }
  
@@ -269,3 +340,4 @@ server.listen(PORT, '0.0.0.0', function () {
   console.log('venue-help-desk listening on port ' + PORT);
   console.log('data file: ' + DATA_FILE);
 });
+ 
