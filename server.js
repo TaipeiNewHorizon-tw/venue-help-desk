@@ -12,14 +12,29 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
  
-const CATEGORY_IDS = ['sound', 'network', 'clean', 'catering', 'other'];
 const STATUS_ORDER = ['pending', 'in_progress', 'done'];
 const DAY = 86400000;
+ 
+function defaultCategories() {
+  return [
+    { id: 'sound', label: '音響', icon: 'sound', requireNote: false },
+    { id: 'network', label: '網路', icon: 'network', requireNote: false },
+    { id: 'clean', label: '清潔', icon: 'clean', requireNote: false },
+    { id: 'catering', label: '餐飲', icon: 'catering', requireNote: false },
+    { id: 'other', label: '其他', icon: 'other', requireNote: true },
+  ];
+}
  
 function defaultState() {
   const rooms = [];
   for (let i = 1; i <= 12; i++) rooms.push({ id: 'room-' + i, name: '場地 ' + i });
-  return { venueName: '活動場地', rooms, requests: [], serviceHours: { start: '08:00', end: '23:59' } };
+  return {
+    venueName: '活動場地',
+    rooms,
+    requests: [],
+    serviceHours: { start: '08:00', end: '23:59' },
+    categories: defaultCategories(),
+  };
 }
  
 function loadState() {
@@ -29,6 +44,9 @@ function loadState() {
     if (parsed && Array.isArray(parsed.rooms) && Array.isArray(parsed.requests)) {
       if (!parsed.serviceHours || !parsed.serviceHours.start || !parsed.serviceHours.end) {
         parsed.serviceHours = { start: '08:00', end: '23:59' };
+      }
+      if (!Array.isArray(parsed.categories) || !parsed.categories.length) {
+        parsed.categories = defaultCategories();
       }
       return parsed;
     }
@@ -120,16 +138,19 @@ app.post('/api/requests', function (req, res) {
     const sh = state.serviceHours || { start: '08:00', end: '23:59' };
     return res.status(403).json({ error: '目前非服務時段（開放時間 ' + sh.start + '–' + sh.end + '），請於服務時段內送出，或聯絡工作人員' });
   }
-  if (CATEGORY_IDS.indexOf(body.category) === -1) return res.status(400).json({ error: '問題類別不正確' });
+  const cat = (state.categories || []).find(function (c) { return c.id === body.category; });
+  if (!cat) return res.status(400).json({ error: '問題類別不正確' });
   const note = String(body.note || '').trim().slice(0, 300);
-  if (body.category === 'other' && !note) return res.status(400).json({ error: '請簡述問題內容' });
+  if (cat.requireNote && !note) return res.status(400).json({ error: '請簡述問題內容' });
  
   const now = Date.now();
   const request = {
     id: uid('req'),
     roomId: room.id,
     roomName: room.name,
-    category: body.category,
+    category: cat.id,
+    categoryLabel: cat.label,
+    categoryIcon: cat.icon,
     note: note,
     status: 'pending',
     createdAt: now,
@@ -182,6 +203,44 @@ app.delete('/api/rooms/:id', function (req, res) {
   res.json(state);
 });
  
+app.post('/api/categories', function (req, res) {
+  const label = String((req.body && req.body.label) || '').trim().slice(0, 20);
+  if (!label) return res.status(400).json({ error: '請輸入類別名稱' });
+  const icon = String((req.body && req.body.icon) || 'other').slice(0, 30);
+  const requireNote = !!(req.body && req.body.requireNote);
+  state.categories.push({ id: uid('cat'), label: label, icon: icon, requireNote: requireNote });
+  persist();
+  broadcast();
+  res.json(state);
+});
+ 
+app.patch('/api/categories/:id', function (req, res) {
+  const cat = state.categories.find(function (c) { return c.id === req.params.id; });
+  if (!cat) return res.status(404).json({ error: '找不到此類別' });
+  if (req.body && req.body.label !== undefined) {
+    const label = String(req.body.label).trim().slice(0, 20);
+    if (!label) return res.status(400).json({ error: '請輸入類別名稱' });
+    cat.label = label;
+  }
+  if (req.body && req.body.icon !== undefined) {
+    cat.icon = String(req.body.icon).slice(0, 30);
+  }
+  if (req.body && req.body.requireNote !== undefined) {
+    cat.requireNote = !!req.body.requireNote;
+  }
+  persist();
+  broadcast();
+  res.json(state);
+});
+ 
+app.delete('/api/categories/:id', function (req, res) {
+  if (state.categories.length <= 1) return res.status(400).json({ error: '至少需保留一個類別' });
+  state.categories = state.categories.filter(function (c) { return c.id !== req.params.id; });
+  persist();
+  broadcast();
+  res.json(state);
+});
+ 
 app.patch('/api/venue', function (req, res) {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 60) || '活動場地';
   state.venueName = name;
@@ -210,4 +269,3 @@ server.listen(PORT, '0.0.0.0', function () {
   console.log('venue-help-desk listening on port ' + PORT);
   console.log('data file: ' + DATA_FILE);
 });
- 
