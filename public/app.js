@@ -353,9 +353,15 @@
     var pending = all.filter(function (r) { return r.status === 'pending'; });
     var inProgress = all.filter(function (r) { return r.status === 'in_progress'; });
     var doneToday = all.filter(function (r) { return r.status === 'done' && isToday(r.updatedAt); });
+    // "今日總覽": every still-open request no matter how old (跨日未完成的舊案件
+    // 不會被漏掉), plus anything opened or closed today so today's full picture
+    // — including cases already結案 — stays visible without switching分頁.
+    var todayOverview = all.filter(function (r) {
+      return r.status !== 'done' || isToday(r.createdAt) || isToday(r.updatedAt);
+    });
  
     var listSource;
-    if (activeTab === 'active') listSource = pending.concat(inProgress);
+    if (activeTab === 'active') listSource = todayOverview;
     else if (activeTab === 'pending') listSource = pending;
     else if (activeTab === 'in_progress') listSource = inProgress;
     else listSource = all.filter(function (r) { return r.status === 'done'; });
@@ -365,7 +371,7 @@
       return a.status === 'done' ? b.updatedAt - a.updatedAt : a.createdAt - b.createdAt;
     });
  
-    var emptyLabel = activeTab === 'in_progress' ? '處理中的' : activeTab === 'pending' ? '待處理的' : activeTab === 'done' ? '已完成的' : '待處理或處理中的';
+    var emptyLabel = activeTab === 'in_progress' ? '處理中的' : activeTab === 'pending' ? '待處理的' : activeTab === 'done' ? '已完成的' : '待處理、處理中或今日相關的';
     var cards = listSource.length ? listSource.map(renderReqCard).join('') : '<div class="empty card">目前沒有' + emptyLabel + '請求</div>';
  
     app.innerHTML =
@@ -382,7 +388,7 @@
           '<div class="stat"><b class="mono">' + inProgress.length + '</b><span>處理中</span></div>' +
           '<div class="stat"><b class="mono">' + doneToday.length + '</b><span>今日已完成</span></div>' +
         '</div>' +
-        '<div class="tabs">' + tabBtn('active', '進行中') + tabBtn('pending', '待處理') + tabBtn('in_progress', '處理中') + tabBtn('done', '已完成') + '</div>' +
+        '<div class="tabs">' + tabBtn('active', '今日總覽') + tabBtn('pending', '待處理') + tabBtn('in_progress', '處理中') + tabBtn('done', '已完成') + '</div>' +
         '<div class="list">' + cards + '</div>' +
         (settingsOpen ? renderSettings() : '') +
       '</div>' +
