@@ -1,21 +1,49 @@
-
 (function () {
   'use strict';
  
-  var CATEGORIES = [
-    { id: 'sound', label: '音響', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>' },
-    { id: 'network', label: '網路', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16.3a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></svg>' },
-    { id: 'clean', label: '清潔', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/></svg>' },
-    { id: 'catering', label: '餐飲', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h11v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/><path d="M16 9h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 4.5c0 1-1 1-1 2s1 1 1 2"/><path d="M12 4.5c0 1-1 1-1 2s1 1 1 2"/></svg>' },
-    { id: 'other', label: '其他', icon: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>' }
+  var ICONS = {
+    sound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>',
+    network: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16.3a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></svg>',
+    clean: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/></svg>',
+    catering: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h11v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8z"/><path d="M16 9h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 4.5c0 1-1 1-1 2s1 1 1 2"/><path d="M12 4.5c0 1-1 1-1 2s1 1 1 2"/></svg>',
+    water: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s6 6.7 6 11a6 6 0 0 1-12 0c0-4.3 6-11 6-11z"/></svg>',
+    power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
+    furniture: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3"/><path d="M3 9h18v6H3z"/><path d="M5 15v4M19 15v4"/></svg>',
+    parking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9.5 16V8h3a3 3 0 0 1 0 6h-3"/></svg>',
+    security: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3z"/></svg>',
+    other: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>'
+  };
+  var ICON_OPTIONS = [
+    { key: 'sound', label: '音響' },
+    { key: 'network', label: '網路' },
+    { key: 'clean', label: '清潔' },
+    { key: 'catering', label: '餐飲' },
+    { key: 'water', label: '飲水' },
+    { key: 'power', label: '電力' },
+    { key: 'furniture', label: '桌椅' },
+    { key: 'parking', label: '停車' },
+    { key: 'security', label: '保全' },
+    { key: 'other', label: '其他（預設圖示）' }
   ];
-  var CAT_MAP = {};
-  CATEGORIES.forEach(function (c) { CAT_MAP[c.id] = c; });
+  function iconFor(key) { return ICONS[key] || ICONS.other; }
+  function iconOptionsHtml(selected) {
+    return ICON_OPTIONS.map(function (o) {
+      return '<option value="' + o.key + '"' + (o.key === selected ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+    }).join('');
+  }
+ 
+  var DEFAULT_CATEGORIES = [
+    { id: 'sound', label: '音響', icon: 'sound', requireNote: false },
+    { id: 'network', label: '網路', icon: 'network', requireNote: false },
+    { id: 'clean', label: '清潔', icon: 'clean', requireNote: false },
+    { id: 'catering', label: '餐飲', icon: 'catering', requireNote: false },
+    { id: 'other', label: '其他', icon: 'other', requireNote: true }
+  ];
  
   var STATUS_ORDER = ['pending', 'in_progress', 'done'];
   var STATUS_LABEL = { pending: '待處理', in_progress: '處理中', done: '已完成' };
  
-  var state = { venueName: '活動場地', rooms: [], requests: [], serviceHours: { start: '08:00', end: '23:59' } };
+  var state = { venueName: '活動場地', rooms: [], requests: [], serviceHours: { start: '08:00', end: '23:59' }, categories: DEFAULT_CATEGORIES };
   var app = document.getElementById('app');
  
   var selectedCategory = null;
@@ -145,17 +173,17 @@
     var open = isServiceOpen();
     var sh = state.serviceHours || { start: '08:00', end: '23:59' };
  
-    var catGrid = CATEGORIES.map(function (c) {
+    var catGrid = (state.categories || []).map(function (c) {
       var pressed = selectedCategory === c.id;
-      return '<button type="button" class="cat-btn" data-cat="' + c.id + '" aria-pressed="' + pressed + '">' + c.icon + '<span>' + esc(c.label) + '</span></button>';
+      return '<button type="button" class="cat-btn" data-cat="' + c.id + '" aria-pressed="' + pressed + '">' + iconFor(c.icon) + '<span>' + esc(c.label) + '</span></button>';
     }).join('');
  
-    var needsNote = selectedCategory === 'other';
+    var selectedCat = (state.categories || []).find(function (c) { return c.id === selectedCategory; });
+    var needsNote = !!(selectedCat && selectedCat.requireNote);
     var myList = mine.length ? mine.map(function (r) {
-      var c = CAT_MAP[r.category] || CAT_MAP.other;
       return '<div class="req-row">' +
-        '<div class="req-cat">' + c.icon + '</div>' +
-        '<div class="req-main"><div class="req-title">' + esc(c.label) + '</div>' +
+        '<div class="req-cat">' + iconFor(r.categoryIcon) + '</div>' +
+        '<div class="req-main"><div class="req-title">' + esc(r.categoryLabel || r.category) + '</div>' +
         (r.note ? '<div class="req-note">' + esc(r.note) + '</div>' : '') + '</div>' +
         '<div style="text-align:right"><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span>' +
         '<div class="req-time">' + elapsedText(r.createdAt) + '</div></div></div>';
@@ -186,7 +214,8 @@
     if (submitBtn) submitBtn.addEventListener('click', function () {
       if (!selectedCategory) { showToast('請先選擇問題類別'); return; }
       var note = (document.getElementById('note-input').value || '').trim().slice(0, 300);
-      if (selectedCategory === 'other' && !note) { showToast('請簡述問題內容'); return; }
+      var pickedCat = (state.categories || []).find(function (c) { return c.id === selectedCategory; });
+      if (pickedCat && pickedCat.requireNote && !note) { showToast('請簡述問題內容'); return; }
       submitting = true;
       renderClient(room);
       api('POST', '/api/requests', { roomId: room.id, category: selectedCategory, note: note })
@@ -211,17 +240,16 @@
   }
  
   function renderReqCard(r) {
-    var c = CAT_MAP[r.category] || CAT_MAP.other;
     var cls = ageClass(r.createdAt, r.status);
     var actions = '';
     if (r.status === 'pending') actions = '<button type="button" class="btn btn--accent" data-action="advance" data-id="' + r.id + '" data-to="in_progress">接單處理</button>';
     else if (r.status === 'in_progress') actions = '<button type="button" class="btn btn--accent" data-action="advance" data-id="' + r.id + '" data-to="done">標記完成</button>';
     else actions = '<button type="button" class="btn btn--ghost" data-action="advance" data-id="' + r.id + '" data-to="pending">重新開啟</button>';
     return '<div class="card req-card ' + cls + '">' +
-      '<div class="req-cat">' + c.icon + '</div>' +
+      '<div class="req-cat">' + iconFor(r.categoryIcon) + '</div>' +
       '<div class="req-body">' +
         '<div class="req-top"><span class="room-name">' + esc(r.roomName) + '</span><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span></div>' +
-        '<div style="color:var(--ink-soft);font-size:.88rem;margin-top:2px;">' + esc(c.label) + (r.note ? '　·　' + esc(r.note) : '') + '</div>' +
+        '<div style="color:var(--ink-soft);font-size:.88rem;margin-top:2px;">' + esc(r.categoryLabel || r.category) + (r.note ? '　·　' + esc(r.note) : '') + '</div>' +
         '<div class="req-meta"><span class="age-tag">報修 ' + formatDateTime(r.createdAt) + '（' + elapsedText(r.createdAt) + '）</span>' +
         (r.status === 'done' ? '<span class="age-tag">結案 ' + formatDateTime(r.updatedAt) + '　·　耗時 ' + durationText(r.createdAt, r.updatedAt) + '</span>' : '') +
         '</div>' +
@@ -243,6 +271,15 @@
         '<button type="button" class="btn ' + (deleting ? 'btn--danger' : 'btn--ghost') + '" data-action="delete-room" data-id="' + r.id + '">' + (deleting ? '確定刪除？' : '刪除') + '</button>' +
       '</div>';
     }).join('');
+    var catRows = (state.categories || []).map(function (c) {
+      var deletingCat = !!confirmingDelete[c.id];
+      return '<div class="room-row">' +
+        '<select data-onchange="category-icon" data-id="' + c.id + '" style="max-width:120px;">' + iconOptionsHtml(c.icon) + '</select>' +
+        '<input class="grow" value="' + esc(c.label) + '" data-onchange="rename-category" data-id="' + c.id + '">' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--ink-soft);white-space:nowrap;"><input type="checkbox" style="width:auto;" data-onchange="category-note" data-id="' + c.id + '"' + (c.requireNote ? ' checked' : '') + '>需填說明</label>' +
+        '<button type="button" class="btn ' + (deletingCat ? 'btn--danger' : 'btn--ghost') + '" data-action="delete-category" data-id="' + c.id + '">' + (deletingCat ? '確定刪除？' : '刪除') + '</button>' +
+      '</div>';
+    }).join('');
     var sh = state.serviceHours || { start: '08:00', end: '23:59' };
     return '<div class="card settings-panel">' +
       '<h2>場地設定</h2>' +
@@ -258,6 +295,14 @@
       '</div>' +
       '<div style="margin-top:16px;">' + rows + '</div>' +
       '<div class="add-room"><input id="new-room-name" placeholder="新場地名稱，例如：3樓 A廳"><button type="button" class="btn btn--accent" data-action="add-room">新增場地</button></div>' +
+      '<label class="field-label" style="margin-top:22px;">求助問題類別(客戶送出求助時可選擇的項目，可自行新增、改名、換圖示或刪除)</label>' +
+      '<div>' + catRows + '</div>' +
+      '<div class="add-room" style="margin-top:10px;">' +
+        '<select id="new-cat-icon" style="max-width:120px;">' + iconOptionsHtml('other') + '</select>' +
+        '<input id="new-cat-name" placeholder="新類別名稱，例如：飲水">' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--ink-soft);"><input type="checkbox" style="width:auto;" id="new-cat-note">需填說明</label>' +
+        '<button type="button" class="btn btn--accent" data-action="add-category">新增類別</button>' +
+      '</div>' +
     '</div>';
   }
  
@@ -345,6 +390,30 @@
       var val2 = (input.value || '').trim().slice(0, 40);
       if (!val2) { showToast('請輸入場地名稱'); return; }
       mutate(api('POST', '/api/rooms', { name: val2 }));
+    } else if (action === 'rename-category') {
+      var catVal = el.value.trim().slice(0, 20);
+      if (catVal) mutate(api('PATCH', '/api/categories/' + encodeURIComponent(el.getAttribute('data-id')), { label: catVal }));
+    } else if (action === 'category-icon') {
+      mutate(api('PATCH', '/api/categories/' + encodeURIComponent(el.getAttribute('data-id')), { icon: el.value }));
+    } else if (action === 'category-note') {
+      mutate(api('PATCH', '/api/categories/' + encodeURIComponent(el.getAttribute('data-id')), { requireNote: el.checked }));
+    } else if (action === 'delete-category') {
+      var cid = el.getAttribute('data-id');
+      if (confirmingDelete[cid]) {
+        clearTimeout(confirmingDelete[cid]);
+        delete confirmingDelete[cid];
+        mutate(api('DELETE', '/api/categories/' + encodeURIComponent(cid)));
+      } else {
+        confirmingDelete[cid] = setTimeout(function () { delete confirmingDelete[cid]; renderStaff(); }, 4000);
+        renderStaff();
+      }
+    } else if (action === 'add-category') {
+      var nameInput = document.getElementById('new-cat-name');
+      var iconSelect = document.getElementById('new-cat-icon');
+      var noteCheck = document.getElementById('new-cat-note');
+      var catName = (nameInput.value || '').trim().slice(0, 20);
+      if (!catName) { showToast('請輸入類別名稱'); return; }
+      mutate(api('POST', '/api/categories', { label: catName, icon: iconSelect.value, requireNote: !!noteCheck.checked }));
     }
   }
  
