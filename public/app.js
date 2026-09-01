@@ -1,6 +1,6 @@
 (function () {
   'use strict';
- 
+
   var ICONS = {
     sound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg>',
     network: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16.3a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -31,7 +31,7 @@
       return '<option value="' + o.key + '"' + (o.key === selected ? ' selected' : '') + '>' + esc(o.label) + '</option>';
     }).join('');
   }
- 
+
   var DEFAULT_CATEGORIES = [
     { id: 'sound', label: '音響', icon: 'sound', requireNote: false },
     { id: 'network', label: '網路', icon: 'network', requireNote: false },
@@ -39,13 +39,13 @@
     { id: 'catering', label: '餐飲', icon: 'catering', requireNote: false },
     { id: 'other', label: '其他', icon: 'other', requireNote: true }
   ];
- 
+
   var STATUS_ORDER = ['pending', 'in_progress', 'done'];
   var STATUS_LABEL = { pending: '待處理', in_progress: '處理中', done: '已完成' };
- 
+
   var state = { venueName: '活動場地', rooms: [], requests: [], serviceHours: { start: '08:00', end: '23:59' }, categories: DEFAULT_CATEGORIES };
   var app = document.getElementById('app');
- 
+
   var selectedCategory = null;
   var confirmingDelete = {};
   var settingsOpen = false;
@@ -53,13 +53,22 @@
   var qrModalRoom = null;
   var submitting = false;
   var connected = false;
- 
+
+  // ---- new-request alert (sound / tab-title flash) for the staff dashboard ----
+  var lastPendingIds = null; // null = not yet initialised; first sync just sets the baseline, never alerts
+  var alertMuted = false;
+  try { alertMuted = localStorage.getItem('vhd_muted') === '1'; } catch (e) {}
+  var audioCtx = null;
+  var baseTitle = document.title;
+  var titleFlashTimer = null;
+  var titleFlashOn = false;
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
- 
+
   function showToast(msg) {
     var old = document.querySelector('.toast');
     if (old) old.remove();
@@ -69,7 +78,73 @@
     document.body.appendChild(t);
     setTimeout(function () { t.remove(); }, 2600);
   }
- 
+
+  // A click anywhere "warms up" the audio context — browsers block sound
+  // that isn't triggered by a user gesture, so the very first alert after
+  // opening the page may be silent (title flash + toast still fire) until
+  // someone clicks anywhere on the page once.
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    } else if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function () {});
+    }
+  }
+  document.addEventListener('click', ensureAudioCtx);
+
+  function beep(freq, delaySec, durSec) {
+    setTimeout(function () {
+      if (!audioCtx) return;
+      try {
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = freq;
+        var t0 = audioCtx.currentTime;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.35, t0 + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.start(t0);
+        o.stop(t0 + durSec + 0.02);
+      } catch (e) {}
+    }, delaySec * 1000);
+  }
+
+  function playAlertSound() {
+    if (!audioCtx) return;
+    beep(880, 0, 0.32);
+    beep(1046, 0.2, 0.28);
+  }
+
+  function startTitleFlash(msg) {
+    if (titleFlashTimer) return;
+    titleFlashOn = false;
+    titleFlashTimer = setInterval(function () {
+      document.title = titleFlashOn ? baseTitle : msg;
+      titleFlashOn = !titleFlashOn;
+    }, 1000);
+  }
+  function stopTitleFlash() {
+    if (titleFlashTimer) { clearInterval(titleFlashTimer); titleFlashTimer = null; }
+    document.title = baseTitle;
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) stopTitleFlash(); });
+  window.addEventListener('focus', stopTitleFlash);
+
+  function computePendingIds(s) {
+    var ids = {};
+    (s.requests || []).forEach(function (r) { if (r.status === 'pending') ids[r.id] = true; });
+    return ids;
+  }
+
+  function notifyNewRequests(count) {
+    if (!alertMuted) playAlertSound();
+    var label = count > 1 ? ('🔔 ' + count + ' 筆新求助') : '🔔 有新的求助';
+    startTitleFlash(label + ' - 場地協助儀表板');
+    showToast(count > 1 ? ('收到 ' + count + ' 筆新的求助請求') : '收到新的求助請求');
+  }
+
   function api(method, url, body) {
     return fetch(url, {
       method: method,
@@ -84,12 +159,21 @@
       return res.json();
     });
   }
- 
+
   function applyState(s) {
+    if (currentView().type === 'staff') {
+      var newPendingIds = computePendingIds(s);
+      if (lastPendingIds) {
+        var addedCount = 0;
+        Object.keys(newPendingIds).forEach(function (id) { if (!lastPendingIds[id]) addedCount++; });
+        if (addedCount > 0) notifyNewRequests(addedCount);
+      }
+      lastPendingIds = newPendingIds;
+    }
     state = s;
     render();
   }
- 
+
   function elapsedText(ts) {
     var diff = Math.max(0, Date.now() - ts);
     var m = Math.floor(diff / 60000);
@@ -138,7 +222,7 @@
     if (startM <= endM) return nowM >= startM && nowM <= endM;
     return nowM >= startM || nowM <= endM;
   }
- 
+
   function currentView() {
     var params = new URLSearchParams(location.search);
     var roomId = params.get('room');
@@ -148,11 +232,11 @@
     }
     return { type: 'staff' };
   }
- 
+
   function roomUrl(roomId) {
     return location.origin + '/?room=' + encodeURIComponent(roomId);
   }
- 
+
   function setSyncIndicator() {
     var dot = document.getElementById('sync-dot');
     var label = document.getElementById('sync-label');
@@ -162,22 +246,22 @@
     else if (!connected) { dot.classList.add('is-off'); label.textContent = '連線中斷，正在重新連線…'; }
     else { label.textContent = '即時同步中'; }
   }
- 
+
   /* ---------------- client view ---------------- */
   function renderClient(room) {
     // Only today's own requests — so a new day's renter never sees a
     // previous company's history on what looks like "their" room page.
     var mine = state.requests.filter(function (r) { return r.roomId === room.id && isToday(r.createdAt); })
       .sort(function (a, b) { return b.createdAt - a.createdAt; }).slice(0, 6);
- 
+
     var open = isServiceOpen();
     var sh = state.serviceHours || { start: '08:00', end: '23:59' };
- 
+
     var catGrid = (state.categories || []).map(function (c) {
       var pressed = selectedCategory === c.id;
       return '<button type="button" class="cat-btn" data-cat="' + c.id + '" aria-pressed="' + pressed + '">' + iconFor(c.icon) + '<span>' + esc(c.label) + '</span></button>';
     }).join('');
- 
+
     var selectedCat = (state.categories || []).find(function (c) { return c.id === selectedCategory; });
     var needsNote = !!(selectedCat && selectedCat.requireNote);
     var myList = mine.length ? mine.map(function (r) {
@@ -188,14 +272,14 @@
         '<div style="text-align:right"><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span>' +
         '<div class="req-time">' + elapsedText(r.createdAt) + '</div></div></div>';
     }).join('') : '';
- 
+
     var formHtml = open ?
       ('<div class="cat-grid">' + catGrid + '</div>' +
         '<label class="field-label" for="note-input">補充說明' + (needsNote ? '（請簡述問題）' : '（選填）') + '</label>' +
         '<textarea id="note-input" rows="3" maxlength="300" placeholder="' + (needsNote ? '請簡短描述您需要的協助…' : '若有其他細節，可在此補充…') + '"></textarea>' +
         '<button type="button" class="submit-btn" id="submit-btn"' + (submitting ? ' disabled' : '') + '>' + (submitting ? '送出中…' : '送出求助') + '</button>')
       : ('<div class="banner banner--info" style="margin-top:14px;">目前非服務時段(開放時間 ' + esc(sh.start) + '–' + esc(sh.end) + '),暫時無法送出新的求助,如有緊急狀況請直接聯絡工作人員。</div>');
- 
+
     app.innerHTML =
       '<div class="shell shell--narrow">' +
         '<div class="room-head"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1><p style="color:var(--ink-soft);font-size:.9rem;margin-top:6px;">需要協助嗎？選擇項目後送出，工作人員會盡快為您服務。</p></div>' +
@@ -203,7 +287,7 @@
         (mine.length ? '<div class="my-requests"><h2>本場地今天的請求</h2>' + myList + '</div>' : '') +
         '<div class="sync" style="justify-content:center;margin-top:22px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
       '</div>';
- 
+
     app.querySelectorAll('.cat-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         selectedCategory = btn.getAttribute('data-cat');
@@ -233,12 +317,12 @@
     });
     setSyncIndicator();
   }
- 
+
   /* ---------------- staff view ---------------- */
   function tabBtn(id, label) {
     return '<button type="button" class="tab" data-tab="' + id + '" aria-selected="' + (activeTab === id) + '">' + label + '</button>';
   }
- 
+
   function renderReqCard(r) {
     var cls = ageClass(r.createdAt, r.status);
     var actions = '';
@@ -257,7 +341,7 @@
       '<div class="req-actions">' + actions + '</div>' +
     '</div>';
   }
- 
+
   function renderSettings() {
     var rows = state.rooms.map(function (r) {
       var url = roomUrl(r.id);
@@ -305,7 +389,7 @@
       '</div>' +
     '</div>';
   }
- 
+
   function renderQrModal() {
     var r = qrModalRoom;
     return '<div class="modal-overlay"><div class="modal">' +
@@ -319,7 +403,7 @@
       '</div>' +
     '</div></div>';
   }
- 
+
   function setupQr(room) {
     var holder = document.getElementById('qr-holder');
     if (!holder) return;
@@ -332,7 +416,7 @@
     var overlay = document.querySelector('.modal-overlay');
     if (overlay) overlay.addEventListener('click', function (e) { if (e.target === overlay) { qrModalRoom = null; renderStaff(); } });
   }
- 
+
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { showToast('已複製連結'); }).catch(function () { showToast(text); });
@@ -340,7 +424,7 @@
       showToast(text);
     }
   }
- 
+
   function mutate(promise) {
     submitting = true;
     render();
@@ -350,7 +434,7 @@
       showToast(err.message || '操作失敗，請稍後再試');
     });
   }
- 
+
   function handleStaffAction(el) {
     var action = el.getAttribute('data-action') || el.getAttribute('data-onchange');
     if (action === 'advance') {
@@ -416,7 +500,7 @@
       mutate(api('POST', '/api/categories', { label: catName, icon: iconSelect.value, requireNote: !!noteCheck.checked }));
     }
   }
- 
+
   function renderStaff() {
     var all = state.requests;
     var pending = all.filter(function (r) { return r.status === 'pending'; });
@@ -428,27 +512,28 @@
     var todayOverview = all.filter(function (r) {
       return r.status !== 'done' || isToday(r.createdAt) || isToday(r.updatedAt);
     });
- 
+
     var listSource;
     if (activeTab === 'active') listSource = todayOverview;
     else if (activeTab === 'pending') listSource = pending;
     else if (activeTab === 'in_progress') listSource = inProgress;
     else listSource = all.filter(function (r) { return r.status === 'done'; });
- 
+
     listSource = listSource.slice().sort(function (a, b) {
       if (a.status !== b.status) return STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status);
       return a.status === 'done' ? b.updatedAt - a.updatedAt : a.createdAt - b.createdAt;
     });
- 
+
     var emptyLabel = activeTab === 'in_progress' ? '處理中的' : activeTab === 'pending' ? '待處理的' : activeTab === 'done' ? '已完成的' : '待處理、處理中或今日相關的';
     var cards = listSource.length ? listSource.map(renderReqCard).join('') : '<div class="empty card">目前沒有' + emptyLabel + '請求</div>';
- 
+
     app.innerHTML =
       '<div class="shell">' +
         '<div class="topbar">' +
           '<div class="brand"><span class="brand-eyebrow">場地協助儀表板</span><span class="brand-name">' + esc(state.venueName) + '</span></div>' +
           '<div style="display:flex;align-items:center;gap:14px;">' +
             '<div class="sync"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
+            '<button type="button" class="btn" id="mute-toggle" title="開著這個分頁時，有新的求助會播提示音、分頁標題閃爍">' + (alertMuted ? '🔕 提醒已關閉' : '🔔 提醒已開啟') + '</button>' +
             '<button type="button" class="btn settings-toggle" id="settings-toggle">場地設定</button>' +
           '</div>' +
         '</div>' +
@@ -462,12 +547,19 @@
         (settingsOpen ? renderSettings() : '') +
       '</div>' +
       (qrModalRoom ? renderQrModal() : '');
- 
+
     app.querySelectorAll('.tab').forEach(function (btn) {
       btn.addEventListener('click', function () { activeTab = btn.getAttribute('data-tab'); renderStaff(); });
     });
     var st = document.getElementById('settings-toggle');
     if (st) st.addEventListener('click', function () { settingsOpen = !settingsOpen; renderStaff(); });
+    var mt = document.getElementById('mute-toggle');
+    if (mt) mt.addEventListener('click', function () {
+      alertMuted = !alertMuted;
+      try { localStorage.setItem('vhd_muted', alertMuted ? '1' : '0'); } catch (e) {}
+      if (!alertMuted) { ensureAudioCtx(); playAlertSound(); }
+      renderStaff();
+    });
     app.querySelectorAll('[data-action]').forEach(function (el) {
       el.addEventListener('click', function () { handleStaffAction(el); });
     });
@@ -477,7 +569,7 @@
     if (qrModalRoom) setupQr(qrModalRoom);
     setSyncIndicator();
   }
- 
+
   function render() {
     var view = currentView();
     if (view.type === 'client') renderClient(view.room);
@@ -486,7 +578,7 @@
       app.innerHTML = '<div class="invalid-wrap"><div><h1 style="font-size:1.3rem;margin-bottom:8px;">找不到此場地連結</h1><p>請確認連結是否正確，或聯絡工作人員協助。</p></div></div>';
     }
   }
- 
+
   function boot() {
     fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
       state = s;
@@ -495,19 +587,18 @@
       render();
       showToast('無法連線到伺服器，請稍後重新整理');
     });
- 
+
     if (window.io) {
       var socket = window.io();
       socket.on('connect', function () { connected = true; setSyncIndicator(); });
       socket.on('disconnect', function () { connected = false; setSyncIndicator(); });
       socket.on('state', function (s) { applyState(s); });
     }
- 
+
     setInterval(function () {
       if (!settingsOpen && !qrModalRoom) render();
     }, 30000);
   }
- 
+
   boot();
 })();
- 
