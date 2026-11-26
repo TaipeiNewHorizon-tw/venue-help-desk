@@ -31,6 +31,28 @@ function defaultCategories() {
   ];
 }
  
+// The 6th-floor venues. Room names are chosen from this list (the aggregate dashboard draws its floor
+// plan from these exact names: "601會議室" ... "608會議室", "A廳" ... "F廳"). Keep in sync with public/app.js.
+const VENUE_ROOMS = ['601會議室', '602會議室', '603會議室', '604會議室', '605會議室', '606會議室', '607會議室', '608會議室',
+  'A廳', 'B廳', 'C廳', 'D廳', 'E廳', 'F廳'];
+
+// Make sure every venue has a room. Placeholder rooms ("場地 N") are renamed in order; anything the staff has
+// already renamed is left alone. Room ids never change, so printed QR codes keep working.
+function seedVenueRooms(st) {
+  const used = new Set(st.rooms.map(function (r) { return r.name; }));
+  let changed = false;
+  VENUE_ROOMS.forEach(function (name) {
+    if (used.has(name)) return;
+    const placeholder = st.rooms.find(function (r) { return /^場地 \d+$/.test(r.name); });
+    if (placeholder) { placeholder.name = name; }
+    else { let n = st.rooms.length + 1; while (st.rooms.some(function (r) { return r.id === 'room-' + n; })) n++;
+      st.rooms.push({ id: 'room-' + n, name: name }); }
+    used.add(name);
+    changed = true;
+  });
+  return changed;
+}
+
 function defaultState() {
   const rooms = [];
   for (let i = 1; i <= 12; i++) rooms.push({ id: 'room-' + i, name: '場地 ' + i });
@@ -107,6 +129,8 @@ function persist() {
   }, 150);
 }
  
+if (seedVenueRooms(state)) { console.log('[rooms] seeded the 14 venue rooms'); persist(); }
+
 // --- permanent storage (SQLite, see store.js and docs/data-and-analytics-design.md) ---
 // Every request and every status change is kept forever. The in-memory `state.requests`
 // is just the live view for the dashboard (open requests + recently finished ones), rebuilt
@@ -371,7 +395,8 @@ app.get('/api/state', requireStaff, function (req, res) {
 });
 
 // Read-only counters for the aggregate dashboard (tnh-hub). Numbers and ages
-// only: no request notes, room names or any other content. Requires
+// and, for the floor plan, which venue has an open request and for which category (room name, category
+// label, status, age): never the request notes or anything the customer typed. Requires
 // "Authorization: Bearer <METRICS_TOKEN>"; refused entirely if METRICS_TOKEN is
 // not set. "Today" is Asia/Taipei.
 function metricsAuth(req, res, next) {
@@ -569,8 +594,9 @@ app.patch('/api/requests/:id', requireStaff, function (req, res) {
 });
  
 app.post('/api/rooms', requireStaff, function (req, res) {
-  const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
-  if (!name) return res.status(400).json({ error: '請輸入場地名稱' });
+  const name = String((req.body && req.body.name) || '').trim();
+  if (VENUE_ROOMS.indexOf(name) === -1) return res.status(400).json({ error: '請從清單選擇場地' });
+  if (state.rooms.some(function (r) { return r.name === name; })) return res.status(409).json({ error: '這個場地已經存在' });
   state.rooms.push({ id: uid('room'), name: name });
   persist();
   broadcast();
@@ -578,10 +604,13 @@ app.post('/api/rooms', requireStaff, function (req, res) {
 });
  
 app.patch('/api/rooms/:id', requireStaff, function (req, res) {
-  const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
-  if (!name) return res.status(400).json({ error: '請輸入場地名稱' });
+  const name = String((req.body && req.body.name) || '').trim();
+  if (VENUE_ROOMS.indexOf(name) === -1) return res.status(400).json({ error: '請從清單選擇場地' });
   const room = state.rooms.find(function (r) { return r.id === req.params.id; });
   if (!room) return res.status(404).json({ error: '找不到此場地' });
+  if (state.rooms.some(function (r) { return r.id !== room.id && r.name === name; })) {
+    return res.status(409).json({ error: '這個場地已經在清單中，請先改掉另一個' });
+  }
   room.name = name;
   persist();
   broadcast();

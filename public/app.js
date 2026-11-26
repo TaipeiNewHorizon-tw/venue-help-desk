@@ -381,12 +381,28 @@
     '</div>';
   }
 
+  // Room names are picked from the fixed 6th-floor list (keep in sync with VENUE_ROOMS in server.js).
+  var VENUE_ROOMS = ['601會議室', '602會議室', '603會議室', '604會議室', '605會議室', '606會議室', '607會議室', '608會議室',
+    'A廳', 'B廳', 'C廳', 'D廳', 'E廳', 'F廳'];
+  function roomSelectHtml(current, selfId, attrs, placeholder) {
+    var takenByOthers = {};
+    state.rooms.forEach(function (x) { if (x.id !== selfId) takenByOthers[x.name] = true; });
+    var opts = placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '';
+    if (current && VENUE_ROOMS.indexOf(current) === -1) {
+      opts += '<option value="' + esc(current) + '" selected>' + esc(current) + '（舊名稱，請改選）</option>';
+    }
+    VENUE_ROOMS.forEach(function (name) {
+      opts += '<option value="' + esc(name) + '"' + (name === current ? ' selected' : '') + (takenByOthers[name] ? ' disabled' : '') + '>' + esc(name) + (takenByOthers[name] ? '（已設定）' : '') + '</option>';
+    });
+    return '<select class="grow" ' + attrs + '>' + opts + '</select>';
+  }
+
   function renderSettings() {
     var rows = state.rooms.map(function (r) {
       var url = roomUrl(r.id);
       var deleting = !!confirmingDelete[r.id];
       return '<div class="room-row">' +
-        '<input class="grow" value="' + esc(r.name) + '" data-onchange="rename-room" data-id="' + r.id + '">' +
+        roomSelectHtml(r.name, r.id, 'data-onchange="rename-room" data-id="' + r.id + '"') +
         '<span class="link-chip" title="' + esc(url) + '">' + esc(url) + '</span>' +
         '<button type="button" class="btn" data-action="copy-link" data-id="' + r.id + '">複製連結</button>' +
         '<button type="button" class="btn" data-action="show-qr" data-id="' + r.id + '">QR code</button>' +
@@ -425,7 +441,7 @@
         '<span style="color:var(--ink-faint);font-size:.78rem;">(結束時間設為 23:59 代表開放到當天午夜)</span>' +
       '</div>' +
       '<div style="margin-top:16px;">' + rows + '</div>' +
-      '<div class="add-room"><input id="new-room-name" placeholder="新場地名稱，例如：3樓 A廳"><button type="button" class="btn btn--accent" data-action="add-room">新增場地</button></div>' +
+      '<div class="add-room">' + roomSelectHtml('', null, 'id="new-room-name"', '選擇要新增的場地…') + '<button type="button" class="btn btn--accent" data-action="add-room">新增場地</button></div>' +
       '<label class="field-label" style="margin-top:22px;">求助問題類別(客戶送出求助時可選擇的項目，可自行新增、改名、換圖示或刪除)</label>' +
       '<div>' + catRows + '</div>' +
       '<div class="add-room" style="margin-top:10px;">' +
@@ -525,7 +541,7 @@
     } else if (action === 'add-room') {
       var input = document.getElementById('new-room-name');
       var val2 = (input.value || '').trim().slice(0, 40);
-      if (!val2) { showToast('請輸入場地名稱'); return; }
+      if (!val2) { showToast('請先選擇場地'); return; }
       mutate(api('POST', '/api/rooms', { name: val2 }));
     } else if (action === 'rename-category') {
       var catVal = el.value.trim().slice(0, 20);

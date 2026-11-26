@@ -104,6 +104,11 @@ test('metrics: counts today (Taipei), open statuses and ages of unresolved reque
   assert.equal(m.unresolved, 3);
   assert.equal(m.unresolved_ages_sec[0], Math.round((now - yesterday) / 1000)); // oldest first
   assert.ok(m.unresolved_ages_sec.includes(420));
+  // which venue needs help and with what: category only, oldest first, never the note
+  assert.equal(m.active.length, 3);
+  assert.deepEqual(m.active[0], { room: '場地 1', category: '音響', status: 'pending', age_sec: Math.round((now - yesterday) / 1000) });
+  assert.deepEqual(m.active.map(a => a.status), ['pending', 'pending', 'in_progress']);
+  assert.ok(!JSON.stringify(m.active).includes('note'));
   s.close();
 });
 

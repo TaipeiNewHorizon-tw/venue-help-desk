@@ -195,7 +195,7 @@ function openStore(dataDir) {
   function metrics(now) {
     const start = taipeiDayStartMs(now), end = start + DAY;
     const one = function (sql, ...p) { return db.prepare(sql).get(...p).n; };
-    const unresolved = db.prepare("SELECT created_at FROM requests WHERE status != 'done'").all();
+    const unresolved = db.prepare("SELECT created_at, room_name, category_label, status FROM requests WHERE status != 'done' ORDER BY created_at ASC").all();
     return {
       calls_today: one('SELECT COUNT(*) AS n FROM requests WHERE created_at >= ? AND created_at < ?', start, end),
       pending: one("SELECT COUNT(*) AS n FROM requests WHERE status = 'pending'"),
@@ -205,6 +205,10 @@ function openStore(dataDir) {
       unresolved_ages_sec: unresolved
         .map(function (r) { return Math.max(0, Math.round((now - r.created_at) / 1000)); })
         .sort(function (a, b) { return b - a; }),
+      // which venue needs help and with what (category only, never the customer's note); oldest first
+      active: unresolved.map(function (r) {
+        return { room: r.room_name, category: r.category_label, status: r.status, age_sec: Math.max(0, Math.round((now - r.created_at) / 1000)) };
+      }),
     };
   }
 
