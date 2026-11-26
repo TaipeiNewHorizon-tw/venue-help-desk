@@ -22,7 +22,7 @@ PORT=3000 npm start      # Windows PowerShell：$env:PORT=3000; npm start
 
 ## 部署（Railway）
 - 必須新增 Volume 並掛載到 `/data`（專案設定 → Volumes），否則每次重新部署，場地清單與求助紀錄都會清空。程式會自動讀 Railway 提供的 `RAILWAY_VOLUME_MOUNT_PATH`；沒有就退回容器內 `data/`（不會保留）。
-- **自動部署：已確認有**（2026-11-26 用 Railway 查證，更正先前「尚未設定」的說法）：Railway 專案 `venue-help-desk`、服務 `web` 連到 `TaipeiNewHorizon-tw/venue-help-desk`，最近一次部署的 commit 就是 `main` 的 `7764f3e`。**所以合併到 `main` 會直接部署到正式環境**。網址 `web-production-21718.up.railway.app`；Volume `state-data` 掛在 `/data`（5000 MB）。
+- **自動部署：2026-11-26 已設定好**。原本 Railway 專案 `venue-help-desk`、服務 `web` 雖然列有 repo `TaipeiNewHorizon-tw/venue-help-desk`，但**沒有指定追蹤的分支**，所以合併到 `main` 後沒有觸發部署（原先文件寫「尚未設定」是對的；我曾誤判為已有自動部署，已更正）。當天已用 Railway 把來源綁定到 `main` 分支，立即部署了 `8928425`，之後**每次推到 `main` 都會自動部署到正式環境**。網址 `web-production-21718.up.railway.app`；Volume `state-data` 掛在 `/data`（5000 MB）。
 - 2026-11-26 已在該服務設定環境變數 `STAFF_PASSWORD`、`METRICS_TOKEN`（以不重新部署的方式設定，會在下一次部署生效；值只在 Railway，不在 repo）。合併分支前這兩個必須已存在，否則儀表板會鎖死。
 - 環境變數名稱：`PORT`、`DATA_DIR`（選用，預設 `./data`）、`RAILWAY_VOLUME_MOUNT_PATH`（Railway 自動提供）、`STAFF_PASSWORD`（新增，儀表板密碼，必填）。
 - 上線網址：待補（請從 Railway 專案取得）。
@@ -34,9 +34,17 @@ PORT=3000 npm start      # Windows PowerShell：$env:PORT=3000; npm start
 - 需登入：`GET /api/state`、所有 `PATCH/DELETE/POST` 的 `/api/requests/:id`、`/api/rooms*`、`/api/categories*`、`/api/venue`、`/api/service-hours`。
 - 維持公開：靜態頁面、`GET /api/public?room=<id>`、`POST /api/requests`。客戶只拿得到自己那個場地的資料（`publicState`），拿不到其他場地的求助紀錄與備註。
 - Socket.IO：移除 CORS `*`（僅同源）；客戶用 `?room=` 加入該場地頻道，工作人員需有效 Cookie 才加入 `staff` 頻道，否則收到 `auth-required`。
-- 已知限制：長時間不關的 Socket 連線在 Cookie 到期後不會自動斷線，但下一次操作 API 會回 401 並回到登入頁；`POST /api/requests`（客戶求助）沒有頻率限制；登入失敗計數只在單一執行個體內。
+- 已知限制：長時間不關的 Socket 連線在 Cookie 到期後不會自動斷線，但下一次操作 API 會回 401 並回到登入頁；客戶求助的頻率限制見下一節（只擋量，擋不住有人換 IP 慢慢送）；登入失敗計數只在單一執行個體內。
 - 本機測試過（API 行為、Cookie 竄改、鎖定、客戶頁即時同步）；**登入成功後儀表板畫面（含登出按鈕）還沒在瀏覽器走過**。
 - 部署前必須：在 Railway 設定 `STAFF_PASSWORD`。
+
+## 客戶求助的頻率限制（2026-11-26 新增）
+`POST /api/requests` 是公開的，所以加了防洗版：
+- **每個場地**每 10 分鐘最多 5 筆；**每個 IP**每 10 分鐘最多 30 筆。超過回 429，訊息「送出太頻繁了，請稍候幾分鐘再試；如有緊急狀況請直接聯絡工作人員」，客戶頁以提示框顯示。
+- 為什麼以場地為主：會場客人通常共用同一個 Wi-Fi（同一個對外 IP），只限 IP 會讓一個人亂送連累全場；IP 上限放寬到 30，主要擋跨場地洗版。
+- 可用環境變數調整：`RATE_LIMIT_WINDOW_MIN`（預設 10）、`RATE_LIMIT_ROOM_MAX`（預設 5）、`RATE_LIMIT_IP_MAX`（預設 30）。
+- 限制：計數存在記憶體，服務重啟就歸零，也只適用單一執行個體；依賴 `trust proxy`（Railway 後面取得真實 IP）。只有「通過驗證、真的建立了案件」的請求才計數，無效請求（不存在的場地、類別錯誤）不計。
+- 本機測過：單一場地第 6 次起被擋、其他場地不受影響、單一 IP 剛好 30 次後被擋、無效請求仍回 400。**尚未在正式環境驗證。**
 
 ## 給彙總儀表板用的 `/api/metrics`（2026-11-25 新增，尚未部署）
 - `GET /api/metrics`，需 `Authorization: Bearer <METRICS_TOKEN>`；**沒設環境變數 `METRICS_TOKEN` 時一律拒絕（503）**，金鑰錯誤回 401。與 `STAFF_PASSWORD` 無關，是另一把給機器讀的金鑰。
