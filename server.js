@@ -2,6 +2,7 @@
  
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -186,19 +187,196 @@ function uid(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
  
+// --- staff authentication -------------------------------------------------
+// One shared password (env STAFF_PASSWORD) protects the dashboard and every
+// write API except the customer help request. Customers only ever see their
+// own room's data (see publicState). If STAFF_PASSWORD is not set, staff
+// access is refused (fail closed) instead of silently leaving the site open.
+const STAFF_PASSWORD = process.env.STAFF_PASSWORD || '';
+const SESSION_COOKIE = 'vhd_staff';
+const SESSION_TTL_MS = 7 * DAY;
+const SESSION_KEY = crypto.createHash('sha256').update('vhd-session:' + STAFF_PASSWORD).digest();
+if (!STAFF_PASSWORD) {
+  console.warn('[auth] STAFF_PASSWORD is not set — staff dashboard is locked until it is configured.');
+}
+
+function sha256(s) {
+  return crypto.createHash('sha256').update(String(s)).digest();
+}
+
+function passwordMatches(input) {
+  if (!STAFF_PASSWORD) return false;
+  return crypto.timingSafeEqual(sha256(input), sha256(STAFF_PASSWORD));
+}
+
+function signSession(expiry) {
+  return crypto.createHmac('sha256', SESSION_KEY).update(String(expiry)).digest('hex');
+}
+
+function makeSessionToken() {
+  const expiry = Date.now() + SESSION_TTL_MS;
+  return expiry + '.' + signSession(expiry);
+}
+
+function parseCookies(header) {
+  const out = {};
+  String(header || '').split(';').forEach(function (part) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  });
+  return out;
+}
+
+function isStaffCookie(cookieHeader) {
+  if (!STAFF_PASSWORD) return false;
+  const token = parseCookies(cookieHeader)[SESSION_COOKIE];
+  if (!token) return false;
+  const parts = token.split('.');
+  if (parts.length !== 2) return false;
+  const expiry = Number(parts[0]);
+  if (!Number.isFinite(expiry) || Date.now() > expiry) return false;
+  const expected = Buffer.from(signSession(expiry), 'utf8');
+  const given = Buffer.from(parts[1], 'utf8');
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+
+function requireStaff(req, res, next) {
+  if (!STAFF_PASSWORD) return res.status(503).json({ error: '伺服器尚未設定 STAFF_PASSWORD，儀表板已鎖定' });
+  if (!isStaffCookie(req.headers.cookie)) return res.status(401).json({ error: '請先登入' });
+  next();
+}
+
+// Simple in-memory throttle for failed logins: 10 failures per IP per 15 min.
+const loginFails = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 10;
+function loginBlocked(ip) {
+  const rec = loginFails.get(ip);
+  if (!rec) return false;
+  if (Date.now() > rec.resetAt) { loginFails.delete(ip); return false; }
+  return rec.count >= LOGIN_MAX_FAILS;
+}
+function recordLoginFail(ip) {
+  const rec = loginFails.get(ip);
+  if (!rec || Date.now() > rec.resetAt) loginFails.set(ip, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
+  else rec.count++;
+}
+
+// What a customer scanning a room QR code may see: venue name, categories,
+// service hours, and only their own room with that room's requests.
+function publicState(roomId) {
+  const room = state.rooms.find(function (r) { return r.id === roomId; });
+  if (!room) return null;
+  return {
+    venueName: state.venueName,
+    rooms: [{ id: room.id, name: room.name }],
+    requests: state.requests.filter(function (r) { return r.roomId === room.id; }),
+    serviceHours: state.serviceHours,
+    categories: state.categories,
+  };
+}
+
 const app = express();
+app.set('trust proxy', 1); // behind Railway's proxy: correct client IP and https detection
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
- 
+
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
- 
+const io = new Server(server); // same-origin only (no CORS)
+
 function broadcast() {
-  io.emit('state', state);
+  io.to('staff').emit('state', state);
+  state.rooms.forEach(function (r) {
+    io.to('room:' + r.id).emit('state', publicState(r.id));
+  });
 }
- 
-app.get('/api/state', function (req, res) {
+
+io.on('connection', function (socket) {
+  const roomId = socket.handshake.query && socket.handshake.query.room;
+  if (roomId) {
+    const pub = publicState(String(roomId));
+    if (!pub) return socket.disconnect(true);
+    socket.join('room:' + pub.rooms[0].id);
+    return socket.emit('state', pub);
+  }
+  if (isStaffCookie(socket.handshake.headers.cookie)) {
+    socket.join('staff');
+    return socket.emit('state', state);
+  }
+  socket.emit('auth-required');
+  socket.disconnect(true);
+});
+
+app.post('/api/login', function (req, res) {
+  if (!STAFF_PASSWORD) return res.status(503).json({ error: '伺服器尚未設定 STAFF_PASSWORD，儀表板已鎖定' });
+  if (loginBlocked(req.ip)) return res.status(429).json({ error: '嘗試次數過多，請 15 分鐘後再試' });
+  const pwd = req.body && req.body.password;
+  if (typeof pwd !== 'string' || !passwordMatches(pwd)) {
+    recordLoginFail(req.ip);
+    return res.status(401).json({ error: '密碼錯誤' });
+  }
+  loginFails.delete(req.ip);
+  res.cookie(SESSION_COOKIE, makeSessionToken(), {
+    httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: SESSION_TTL_MS,
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', function (req, res) {
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+// Staff dashboard data.
+app.get('/api/state', requireStaff, function (req, res) {
   res.json(state);
+});
+
+// Read-only counters for the aggregate dashboard (tnh-hub). Numbers and ages
+// only: no request notes, room names or any other content. Requires
+// "Authorization: Bearer <METRICS_TOKEN>"; refused entirely if METRICS_TOKEN is
+// not set. "Today" is Asia/Taipei.
+function metricsAuth(req, res, next) {
+  const expected = process.env.METRICS_TOKEN;
+  if (!expected) return res.status(503).json({ error: '尚未設定 METRICS_TOKEN' });
+  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+  if (!crypto.timingSafeEqual(sha256(m ? m[1] : ''), sha256(expected))) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
+function taipeiDateStr(ts) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(ts)); // YYYY-MM-DD
+}
+
+app.get('/api/metrics', metricsAuth, function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  const now = Date.now();
+  const today = taipeiDateStr(now);
+  const reqs = state.requests;
+  const unresolved = reqs.filter(function (r) { return r.status !== 'done'; });
+  res.json({
+    system: 'help-desk',
+    now: new Date(now).toISOString(),
+    calls_today: reqs.filter(function (r) { return taipeiDateStr(r.createdAt) === today; }).length,
+    pending: reqs.filter(function (r) { return r.status === 'pending'; }).length,
+    in_progress: reqs.filter(function (r) { return r.status === 'in_progress'; }).length,
+    resolved_today: reqs.filter(function (r) { return r.status === 'done' && taipeiDateStr(r.updatedAt) === today; }).length,
+    unresolved: unresolved.length,
+    // age in seconds of every unresolved request (oldest first), so the hub can apply its own alert threshold
+    unresolved_ages_sec: unresolved
+      .map(function (r) { return Math.max(0, Math.round((now - r.createdAt) / 1000)); })
+      .sort(function (a, b) { return b - a; }),
+    service_open: isWithinServiceHours(),
+  });
+});
+
+// Customer room page data.
+app.get('/api/public', function (req, res) {
+  const pub = publicState(String(req.query.room || ''));
+  if (!pub) return res.status(404).json({ error: '找不到此場地' });
+  res.json(pub);
 });
  
 app.post('/api/requests', function (req, res) {
@@ -231,10 +409,10 @@ app.post('/api/requests', function (req, res) {
   prune();
   persist();
   broadcast();
-  res.json(state);
+  res.json(publicState(room.id)); // customers get only their own room's data back
 });
- 
-app.patch('/api/requests/:id', function (req, res) {
+
+app.patch('/api/requests/:id', requireStaff, function (req, res) {
   const status = req.body && req.body.status;
   if (STATUS_ORDER.indexOf(status) === -1) return res.status(400).json({ error: '狀態不正確' });
   const r = state.requests.find(function (x) { return x.id === req.params.id; });
@@ -247,7 +425,7 @@ app.patch('/api/requests/:id', function (req, res) {
   res.json(state);
 });
  
-app.post('/api/rooms', function (req, res) {
+app.post('/api/rooms', requireStaff, function (req, res) {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
   if (!name) return res.status(400).json({ error: '請輸入場地名稱' });
   state.rooms.push({ id: uid('room'), name: name });
@@ -256,7 +434,7 @@ app.post('/api/rooms', function (req, res) {
   res.json(state);
 });
  
-app.patch('/api/rooms/:id', function (req, res) {
+app.patch('/api/rooms/:id', requireStaff, function (req, res) {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
   if (!name) return res.status(400).json({ error: '請輸入場地名稱' });
   const room = state.rooms.find(function (r) { return r.id === req.params.id; });
@@ -267,14 +445,14 @@ app.patch('/api/rooms/:id', function (req, res) {
   res.json(state);
 });
  
-app.delete('/api/rooms/:id', function (req, res) {
+app.delete('/api/rooms/:id', requireStaff, function (req, res) {
   state.rooms = state.rooms.filter(function (r) { return r.id !== req.params.id; });
   persist();
   broadcast();
   res.json(state);
 });
  
-app.post('/api/categories', function (req, res) {
+app.post('/api/categories', requireStaff, function (req, res) {
   const label = String((req.body && req.body.label) || '').trim().slice(0, 20);
   if (!label) return res.status(400).json({ error: '請輸入類別名稱' });
   const icon = String((req.body && req.body.icon) || 'other').slice(0, 30);
@@ -285,7 +463,7 @@ app.post('/api/categories', function (req, res) {
   res.json(state);
 });
  
-app.patch('/api/categories/:id', function (req, res) {
+app.patch('/api/categories/:id', requireStaff, function (req, res) {
   const cat = state.categories.find(function (c) { return c.id === req.params.id; });
   if (!cat) return res.status(404).json({ error: '找不到此類別' });
   if (req.body && req.body.label !== undefined) {
@@ -304,7 +482,7 @@ app.patch('/api/categories/:id', function (req, res) {
   res.json(state);
 });
  
-app.delete('/api/categories/:id', function (req, res) {
+app.delete('/api/categories/:id', requireStaff, function (req, res) {
   if (state.categories.length <= 1) return res.status(400).json({ error: '至少需保留一個類別' });
   state.categories = state.categories.filter(function (c) { return c.id !== req.params.id; });
   persist();
@@ -312,7 +490,7 @@ app.delete('/api/categories/:id', function (req, res) {
   res.json(state);
 });
  
-app.patch('/api/venue', function (req, res) {
+app.patch('/api/venue', requireStaff, function (req, res) {
   const name = String((req.body && req.body.name) || '').trim().slice(0, 60) || '活動場地';
   state.venueName = name;
   persist();
@@ -320,7 +498,7 @@ app.patch('/api/venue', function (req, res) {
   res.json(state);
 });
  
-app.patch('/api/service-hours', function (req, res) {
+app.patch('/api/service-hours', requireStaff, function (req, res) {
   const start = String((req.body && req.body.start) || '');
   const end = String((req.body && req.body.end) || '');
   if (minutesFromHHMM(start) == null || minutesFromHHMM(end) == null) {
@@ -330,10 +508,6 @@ app.patch('/api/service-hours', function (req, res) {
   persist();
   broadcast();
   res.json(state);
-});
- 
-io.on('connection', function (socket) {
-  socket.emit('state', state);
 });
  
 server.listen(PORT, '0.0.0.0', function () {

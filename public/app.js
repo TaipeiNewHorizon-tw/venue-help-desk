@@ -53,6 +53,8 @@
   var qrModalRoom = null;
   var submitting = false;
   var connected = false;
+  var needLogin = false; // staff view without a valid session shows the login form
+  var roomParam = new URLSearchParams(location.search).get('room');
 
   // ---- new-request alert (sound / tab-title flash) for the staff dashboard ----
   var lastPendingIds = null; // null = not yet initialised; first sync just sets the baseline, never alerts
@@ -151,6 +153,11 @@
       headers: { 'Content-Type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined
     }).then(function (res) {
+      if (res.status === 401 && url !== '/api/login') {
+        // staff session expired or missing: go back to the login screen
+        needLogin = true;
+        render();
+      }
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (e) {
           throw new Error(e.error || ('發生錯誤 (' + res.status + ')'));
@@ -535,6 +542,7 @@
             '<div class="sync"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
             '<button type="button" class="btn" id="mute-toggle" title="開著這個分頁時，有新的求助會播提示音、分頁標題閃爍">' + (alertMuted ? '🔕 提醒已關閉' : '🔔 提醒已開啟') + '</button>' +
             '<button type="button" class="btn settings-toggle" id="settings-toggle">場地設定</button>' +
+            '<button type="button" class="btn btn--ghost" id="logout-btn">登出</button>' +
           '</div>' +
         '</div>' +
         '<div class="stats">' +
@@ -553,6 +561,10 @@
     });
     var st = document.getElementById('settings-toggle');
     if (st) st.addEventListener('click', function () { settingsOpen = !settingsOpen; renderStaff(); });
+    var lo = document.getElementById('logout-btn');
+    if (lo) lo.addEventListener('click', function () {
+      api('POST', '/api/logout').then(function () { location.reload(); }).catch(function () { location.reload(); });
+    });
     var mt = document.getElementById('mute-toggle');
     if (mt) mt.addEventListener('click', function () {
       alertMuted = !alertMuted;
@@ -570,7 +582,31 @@
     setSyncIndicator();
   }
 
+  function renderLogin() {
+    app.innerHTML =
+      '<div class="shell shell--narrow">' +
+        '<div class="room-head"><span class="brand-eyebrow">場地協助儀表板</span><h1>工作人員登入</h1></div>' +
+        '<label class="field-label" for="login-pwd">密碼</label>' +
+        '<input id="login-pwd" type="password" autocomplete="current-password" autofocus>' +
+        '<button type="button" class="submit-btn" id="login-btn">登入</button>' +
+        '<p id="login-msg" style="color:var(--ink-soft);font-size:.88rem;margin-top:10px;"></p>' +
+      '</div>';
+    var pwd = document.getElementById('login-pwd');
+    var msg = document.getElementById('login-msg');
+    function submit() {
+      msg.textContent = '';
+      api('POST', '/api/login', { password: pwd.value }).then(function () {
+        location.reload();
+      }).catch(function (err) {
+        msg.textContent = err.message || '登入失敗';
+      });
+    }
+    document.getElementById('login-btn').addEventListener('click', submit);
+    pwd.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+  }
+
   function render() {
+    if (!roomParam && needLogin) return renderLogin();
     var view = currentView();
     if (view.type === 'client') renderClient(view.room);
     else if (view.type === 'staff') renderStaff();
@@ -580,24 +616,36 @@
   }
 
   function boot() {
-    fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
-      state = s;
-      render();
+    // Customers (?room=…) load only their own room's public data; staff load
+    // the full state, which requires login.
+    var url = roomParam ? '/api/public?room=' + encodeURIComponent(roomParam) : '/api/state';
+    fetch(url).then(function (r) {
+      if (r.status === 401 || r.status === 503) {
+        needLogin = true;
+        render();
+        return null;
+      }
+      return r.ok ? r.json() : null;
+    }).then(function (s) {
+      if (s) { state = s; render(); startSocket(); }
+      else if (!needLogin) render(); // unknown room → "invalid link" page
     }).catch(function () {
       render();
       showToast('無法連線到伺服器，請稍後重新整理');
     });
 
-    if (window.io) {
-      var socket = window.io();
-      socket.on('connect', function () { connected = true; setSyncIndicator(); });
-      socket.on('disconnect', function () { connected = false; setSyncIndicator(); });
-      socket.on('state', function (s) { applyState(s); });
-    }
-
     setInterval(function () {
-      if (!settingsOpen && !qrModalRoom) render();
+      if (!needLogin && !settingsOpen && !qrModalRoom) render();
     }, 30000);
+  }
+
+  function startSocket() {
+    if (!window.io) return;
+    var socket = roomParam ? window.io({ query: { room: roomParam } }) : window.io();
+    socket.on('connect', function () { connected = true; setSyncIndicator(); });
+    socket.on('disconnect', function () { connected = false; setSyncIndicator(); });
+    socket.on('state', function (s) { applyState(s); });
+    socket.on('auth-required', function () { needLogin = true; render(); });
   }
 
   boot();
