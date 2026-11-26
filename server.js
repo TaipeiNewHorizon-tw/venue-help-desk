@@ -6,15 +6,15 @@ const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
- 
+const { openStore } = require('./store');
+
 const PORT = process.env.PORT || 3000;
 // Point RAILWAY_VOLUME_MOUNT_PATH (or DATA_DIR) at a Railway Volume so data
 // survives redeploys. Falls back to a local folder for quick local testing.
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
-// Completed requests that age out of the live dashboard get archived here
-// instead of being thrown away, so history stays available for later
-// date/category analysis without bloating the live state file.
+// Legacy: before the permanent store (helpdesk.db) existed, finished requests were moved here.
+// Still read once at start-up to import them (see importLegacy), never written any more.
 const ARCHIVE_FILE = path.join(DATA_DIR, 'archive.db');
  
 const STATUS_ORDER = ['pending', 'in_progress', 'done'];
@@ -104,85 +104,41 @@ function persist() {
   }, 150);
 }
  
-// --- archive: completed requests that would otherwise be deleted by
-// prune() are saved here first, in a small SQLite file on the same
-// Volume as state.json (so it survives redeploys too). Kept separate
-// from the live JSON state so the dashboard never has to read/write
-// archived history — this file is only ever appended to. If SQLite
-// fails to initialise for any reason, the app logs it and keeps
-// running without archiving (same behaviour as before this feature).
-let archiveDb = null;
-let archiveInsertStmt = null;
+// --- permanent storage (SQLite, see store.js and docs/data-and-analytics-design.md) ---
+// Every request and every status change is kept forever. The in-memory `state.requests`
+// is just the live view for the dashboard (open requests + recently finished ones), rebuilt
+// from the database after every change. If the database cannot be opened we refuse to run
+// rather than silently accepting requests we cannot keep.
+let store;
 try {
-  const Database = require('better-sqlite3');
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  archiveDb = new Database(ARCHIVE_FILE);
-  archiveDb.pragma('journal_mode = WAL');
-  archiveDb.exec(
-    'CREATE TABLE IF NOT EXISTS archived_requests (' +
-    'id TEXT PRIMARY KEY, ' +
-    'room_id TEXT, room_name TEXT, ' +
-    'category TEXT, category_label TEXT, category_icon TEXT, ' +
-    'note TEXT, status TEXT, ' +
-    'created_at INTEGER, updated_at INTEGER, archived_at INTEGER)'
-  );
-  archiveDb.exec('CREATE INDEX IF NOT EXISTS idx_archived_created_at ON archived_requests(created_at)');
-  archiveDb.exec('CREATE INDEX IF NOT EXISTS idx_archived_category ON archived_requests(category)');
-  archiveInsertStmt = archiveDb.prepare(
-    'INSERT OR REPLACE INTO archived_requests ' +
-    '(id, room_id, room_name, category, category_label, category_icon, note, status, created_at, updated_at, archived_at) ' +
-    'VALUES (@id, @roomId, @roomName, @category, @categoryLabel, @categoryIcon, @note, @status, @createdAt, @updatedAt, @archivedAt)'
-  );
-  console.log('[archive] SQLite archive ready: ' + ARCHIVE_FILE);
+  store = openStore(DATA_DIR);
+  // One-time (repeatable, never overwrites) import of the old storage: requests in state.json + archive.db
+  const imported = store.importLegacy(state.requests, ARCHIVE_FILE);
+  state.requests = store.loadLive(Date.now());
+  const c = store.counts();
+  console.log('[store] ready: ' + store.dbFile + ' (' + c.requests + ' requests, ' + c.events + ' events, ' + imported + ' imported from legacy storage)');
 } catch (e) {
-  console.error('[archive] disabled — could not initialise SQLite archive:', e.message);
+  console.error('[store] FATAL: cannot open the database: ' + e.message);
+  process.exit(1);
 }
- 
-function archiveRequests(list) {
-  if (!archiveInsertStmt || !list.length) return;
-  const archivedAt = Date.now();
+
+function refreshLive() {
+  state.requests = store.loadLive(Date.now());
+}
+
+// Daily snapshot of the database (+ state.json) into <data dir>/backups, keep the newest N.
+// Checked at start-up and every 30 minutes; creates at most one per Taipei day.
+const BACKUP_KEEP = positiveInt(process.env.BACKUP_KEEP, 14);
+function runBackup() {
   try {
-    const insertMany = archiveDb.transaction(function (rows) {
-      rows.forEach(function (r) {
-        archiveInsertStmt.run({
-          id: r.id,
-          roomId: r.roomId,
-          roomName: r.roomName,
-          category: r.category,
-          categoryLabel: r.categoryLabel || r.category,
-          categoryIcon: r.categoryIcon || 'other',
-          note: r.note || '',
-          status: r.status,
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt,
-          archivedAt: archivedAt,
-        });
-      });
-    });
-    insertMany(list);
+    const f = store.ensureDailySnapshot(Date.now(), BACKUP_KEEP);
+    if (f) console.log('[backup] created ' + f);
   } catch (e) {
-    console.error('[archive] failed to archive ' + list.length + ' request(s):', e.message);
+    console.error('[backup] failed: ' + e.message);
   }
 }
- 
-function prune() {
-  const now = Date.now();
-  const done = [];
-  const others = [];
-  state.requests.forEach(function (r) {
-    (r.status === 'done' ? done : others).push(r);
-  });
-  done.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
-  const keptDone = [];
-  const toArchive = [];
-  done.forEach(function (r, i) {
-    if (i < 150 && (now - r.updatedAt) < 7 * DAY) keptDone.push(r);
-    else toArchive.push(r);
-  });
-  if (toArchive.length) archiveRequests(toArchive);
-  state.requests = others.concat(keptDone);
-}
- 
+runBackup();
+setInterval(runBackup, 30 * 60 * 1000).unref();
 // --- rate limit for customer help requests (in memory: resets on restart, per instance) ---
 function positiveInt(v, fallback) { const n = parseInt(v, 10); return n > 0 ? n : fallback; }
 const RATE_WINDOW_MS = positiveInt(process.env.RATE_LIMIT_WINDOW_MIN, 10) * 60 * 1000;
@@ -367,30 +323,27 @@ function metricsAuth(req, res, next) {
   next();
 }
 
-function taipeiDateStr(ts) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(ts)); // YYYY-MM-DD
-}
-
+// Counted from the permanent store (not the in-memory live view), so nothing is missed.
+// unresolved_ages_sec: age in seconds of every unresolved request (oldest first), so the hub
+// can apply its own alert threshold.
 app.get('/api/metrics', metricsAuth, function (req, res) {
   res.set('Cache-Control', 'no-store');
   const now = Date.now();
-  const today = taipeiDateStr(now);
-  const reqs = state.requests;
-  const unresolved = reqs.filter(function (r) { return r.status !== 'done'; });
-  res.json({
-    system: 'help-desk',
-    now: new Date(now).toISOString(),
-    calls_today: reqs.filter(function (r) { return taipeiDateStr(r.createdAt) === today; }).length,
-    pending: reqs.filter(function (r) { return r.status === 'pending'; }).length,
-    in_progress: reqs.filter(function (r) { return r.status === 'in_progress'; }).length,
-    resolved_today: reqs.filter(function (r) { return r.status === 'done' && taipeiDateStr(r.updatedAt) === today; }).length,
-    unresolved: unresolved.length,
-    // age in seconds of every unresolved request (oldest first), so the hub can apply its own alert threshold
-    unresolved_ages_sec: unresolved
-      .map(function (r) { return Math.max(0, Math.round((now - r.createdAt) / 1000)); })
-      .sort(function (a, b) { return b - a; }),
-    service_open: isWithinServiceHours(),
-  });
+  res.json(Object.assign(
+    { system: 'help-desk', now: new Date(now).toISOString() },
+    store.metrics(now),
+    { service_open: isWithinServiceHours() }
+  ));
+});
+
+// Health check for the host: only OK when the database answers.
+app.get('/healthz', function (req, res) {
+  try {
+    store.counts();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(503).json({ ok: false });
+  }
 });
 
 // Customer room page data.
@@ -435,8 +388,13 @@ app.post('/api/requests', function (req, res) {
     createdAt: now,
     updatedAt: now,
   };
-  state.requests.push(request);
-  prune();
+  try {
+    store.createRequest(request);
+  } catch (e) {
+    console.error('[store] could not save request:', e.message);
+    return res.status(500).json({ error: '伺服器暫時無法儲存，請稍後再試，或直接聯絡工作人員' });
+  }
+  refreshLive();
   persist();
   broadcast();
   res.json(publicState(room.id)); // customers get only their own room's data back
@@ -445,11 +403,16 @@ app.post('/api/requests', function (req, res) {
 app.patch('/api/requests/:id', requireStaff, function (req, res) {
   const status = req.body && req.body.status;
   if (STATUS_ORDER.indexOf(status) === -1) return res.status(400).json({ error: '狀態不正確' });
-  const r = state.requests.find(function (x) { return x.id === req.params.id; });
-  if (!r) return res.status(404).json({ error: '找不到此請求' });
-  r.status = status;
-  r.updatedAt = Date.now();
-  prune();
+  let result;
+  try {
+    // body.actor = the on-duty person's name typed on the dashboard (honour system, not authentication)
+    result = store.changeStatus(req.params.id, status, req.body && req.body.actor, Date.now());
+  } catch (e) {
+    console.error('[store] could not update request:', e.message);
+    return res.status(500).json({ error: '伺服器暫時無法儲存，請稍後再試' });
+  }
+  if (!result) return res.status(404).json({ error: '找不到此請求' });
+  refreshLive();
   persist();
   broadcast();
   res.json(state);

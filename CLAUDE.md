@@ -11,7 +11,7 @@
 - 畫面：`/` 是工作人員儀表板；`/?room=<場地代碼>` 是客戶求助頁。各場地連結與 QR code 在儀表板的「場地設定」產生。
 - API：`GET /api/state`、`POST /api/requests`、`POST/DELETE /api/rooms`、`POST/DELETE /api/categories`。任何狀態變動都用 Socket.IO 事件 `state` 廣播給所有連線。
 - 預設資料：12 個場地（場地 1–12，可改名）；求助類別為音響、網路、清潔、餐飲、其他（其他必填備註）。
-- 資料存放：即時資料是單一 JSON 檔 `state.json`；已完成案件超出「最近 150 筆且 7 天內」的部分，自動搬到同目錄的 SQLite `archive.db`（表 `archived_requests`：id、room_id、room_name、category、category_label、category_icon、note、status、created_at、updated_at、archived_at，另有 created_at 與 category 索引）。搬移在每次新增或更新請求時觸發，不需排程。SQLite 初始化失敗時伺服器照常運作，只是不封存。
+- 資料存放（2026-11-26 起，第一階段）：**所有求助與每次狀態變更都永久存在 SQLite `helpdesk.db`**（Volume 上），表 `requests`（每筆案件，場地／類別名稱為當時的快照）與 `request_events`（只增不改的事件紀錄：created／accepted／resolved／reopened／reverted，含處理人員）；邏輯在 `store.js`，使用 Node 內建 `node:sqlite`（不再需要 `better-sqlite3`，所以 `engines` 要求 Node ≥ 22.13）。`state.json` 現在只當設定檔（場地、類別、服務時段、場地總稱），並仍同步寫入「目前儀表板顯示的案件」作為還原備援；儀表板顯示的案件由資料庫重建（未完成的全部＋最近 7 天內完成、最多 150 筆）。舊的 `archive.db` 不再寫入，啟動時只讀一次匯入（可重複執行、不覆蓋）。詳見 `docs/data-and-analytics-design.md`。
 
 ## 啟動
 ```
@@ -22,7 +22,7 @@ PORT=3000 npm start      # Windows PowerShell：$env:PORT=3000; npm start
 
 ## 部署（Railway）
 - 必須新增 Volume 並掛載到 `/data`（專案設定 → Volumes），否則每次重新部署，場地清單與求助紀錄都會清空。程式會自動讀 Railway 提供的 `RAILWAY_VOLUME_MOUNT_PATH`；沒有就退回容器內 `data/`（不會保留）。
-- **自動部署：2026-11-26 已設定好**。原本 Railway 專案 `venue-help-desk`、服務 `web` 雖然列有 repo `TaipeiNewHorizon-tw/venue-help-desk`，但**沒有指定追蹤的分支**，所以合併到 `main` 後沒有觸發部署（原先文件寫「尚未設定」是對的；我曾誤判為已有自動部署，已更正）。當天已用 Railway 把來源綁定到 `main` 分支，立即部署了 `8928425`，之後**每次推到 `main` 都會自動部署到正式環境**。網址 `web-production-21718.up.railway.app`；Volume `state-data` 掛在 `/data`（5000 MB）。
+- **自動部署：實測沒有作用**（2026-11-26，更正先前兩次不實的說法）。Railway 專案 `venue-help-desk`、服務 `web` 列有 repo `TaipeiNewHorizon-tw/venue-help-desk`，但合併到 `main` 之後 Railway **沒有產生新部署**（連續兩次：`8928425`、`c92853c`），所以文件原本寫的「自動部署尚未設定」是對的。目前的部署方式是：合併後，用 Railway 的「重新綁定來源到 `main`」（MCP 的 `connect-service-source`，repo 與 branch=main 同上次）或在 Railway 後台按 Deploy，會立即建置並部署 `main` 最新 commit。要真的自動部署，需要到 Railway 服務的 Settings → Source 確認有選分支、並在 GitHub 的 Railway App 授權設定裡確認此 repo 在可存取清單內（推測原因，尚未驗證）。網址 `web-production-21718.up.railway.app`；Volume `state-data` 掛在 `/data`（5000 MB）。
 - 2026-11-26 已在該服務設定環境變數 `STAFF_PASSWORD`、`METRICS_TOKEN`（以不重新部署的方式設定，會在下一次部署生效；值只在 Railway，不在 repo）。合併分支前這兩個必須已存在，否則儀表板會鎖死。
 - 環境變數名稱：`PORT`、`DATA_DIR`（選用，預設 `./data`）、`RAILWAY_VOLUME_MOUNT_PATH`（Railway 自動提供）、`STAFF_PASSWORD`（新增，儀表板密碼，必填）。
 - 上線網址：待補（請從 Railway 專案取得）。
@@ -38,6 +38,15 @@ PORT=3000 npm start      # Windows PowerShell：$env:PORT=3000; npm start
 - 本機測試過（API 行為、Cookie 竄改、鎖定、客戶頁即時同步）；**登入成功後儀表板畫面（含登出按鈕）還沒在瀏覽器走過**。
 - 部署前必須：在 Railway 設定 `STAFF_PASSWORD`。
 
+## 資料保存、事件紀錄與備份（2026-11-26 第一階段，已完成但尚未部署）
+- **處理人員（君子協定）**：員工儀表板右上角有「值班人員」欄位，存在該瀏覽器（localStorage `vhd_staff_name`）；沒填就不能接單／完成（會跳提示）。名字隨 `PATCH /api/requests/:id` 的 `actor` 送出，記在 `accepted_by`、`resolved_by` 與事件裡。**這不是身分驗證**（整站仍是一個共用密碼），只用於報表歸屬；案件卡片會顯示「接單：○○」「完成：○○」。
+- **記錄方式**：`accepted_at`＝第一次接單（重新開啟後再接單不會改）；`resolved_at`＝最近一次完成；`reopen_count`＝重新開啟次數。從「待處理」直接標記完成會同時記一筆接單與完成。**舊資料（匯入的）沒有接單時間與處理人員**，報表要排除這兩個欄位。
+- **每日快照**：啟動時與每 30 分鐘檢查，每個臺北日期最多一份，存到 `/data/backups/helpdesk-YYYYMMDD.db`（用 `VACUUM INTO` 做一致性備份）與 `state-YYYYMMDD.json`，保留最新 14 份（環境變數 `BACKUP_KEEP`）。**仍在同一個 Volume**，防得了誤操作與檔案損毀，防不了整個 Volume 遺失；離開 Volume 的備份屬第三階段。還原：停服務，用快照檔取代 `/data/helpdesk.db`（同時刪除 `helpdesk.db-wal`、`helpdesk.db-shm`），再啟動；**尚未實際演練過**。
+- **啟動失敗就不啟動**：資料庫打不開會直接結束（exit 1），不會在無法保存的情況下繼續收案。`/healthz` 在資料庫可讀時回 200，部署時建議在 Railway 設 Healthcheck Path = `/healthz`，這樣新版起不來時 Railway 會保留舊版。
+- `/api/metrics` 改從資料庫計算（輸出欄位不變）；`resolved_today` 改依 `resolved_at`（臺北日期）。
+- **測試**：`npm test`（Node 內建測試，14 項：事件與欄位、舊資料匯入與重複匯入、臺北時間邊界、快照與保留數、完整 HTTP 流程含重啟後資料仍在、頻率限制、資料庫打不開時拒絕啟動）。需要 Node ≥ 22.13。
+- **部署注意（第一次上線這版）**：（1）`package.json` 移除了 `better-sqlite3` 並要求 Node ≥ 22.13，要確認 Railway 建置用的 Node 版本；（2）首次啟動會把 `state.json` 與 `archive.db` 的舊案件匯入新資料庫（原檔不動）；（3）部署前先在 Railway 對 Volume 做一份手動備份（若方案支援）；（4）部署後檢查日誌有 `[store] ready` 與 `[backup] created`。
+- 尚未做：報表頁與 CSV 匯出（第二階段）、Bucket 備份與還原演練（第三階段）、被擋下次數記錄（`rejections`，待決定）、客戶備註欄「請勿填寫個人資料」提示（待決定）。
 ## 客戶求助的頻率限制（2026-11-26 新增）
 `POST /api/requests` 是公開的，所以加了防洗版：
 - **每個場地**每 10 分鐘最多 5 筆；**每個 IP**每 10 分鐘最多 30 筆。超過回 429，訊息「送出太頻繁了，請稍候幾分鐘再試；如有緊急狀況請直接聯絡工作人員」，客戶頁以提示框顯示。

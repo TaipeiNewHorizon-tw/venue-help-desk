@@ -5,13 +5,13 @@
   "description": "場地即時協助系統 - 客戶掃碼求助 + 工作人員即時儀表板",
   "main": "server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
   }
