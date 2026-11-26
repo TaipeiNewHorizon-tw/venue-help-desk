@@ -102,3 +102,11 @@ ode:sqlite 的正常警告。部署方式仍是手動（見上方「自動部署
 
 ## `/api/metrics` 新增 `category_stats`（2026-11-26，已測試，尚未部署）
 - `category_stats: {days: 30, total, items: [{category, count}]}`：近 30 天各問題類別（用案件當時的類別名稱）的件數，由多到少，最多 8 類。沒有備註、場地等內容。給營運總表「常見問題統計」用，計算在 `store.js` 的 `categoryStats()`。
+
+## 結案時填寫「處理結果」（2026-11-26，已測試，尚未部署）
+- 員工儀表板按「標記完成」會跳出小視窗，要寫下**處理結果**（最多 300 字，內建 5 個快速填入的片語）才能確認完成；沒填不能送出。取消就維持原狀態。
+- 儲存：`requests.resolution_note`（案件上的最新一筆處理結果），同一段文字也記在 `request_events.detail`（完成事件），所以案件重新開啟再完成也不會遺失舊的紀錄。舊資料庫啟動時自動補欄位。
+- 後端：`PATCH /api/requests/:id` 改成 `done` 時必須帶 `resolution`，空白回 400「請填寫處理結果」；存在性檢查在前（不存在的案件仍回 404）。`store.changeStatus(id, to, actor, now, resolution, {requireResolution})`。
+- **客戶看不到**：`publicState` 會移除 `resolutionNote`（內部改進紀錄不給客戶）。
+- 彙整：報表頁最下方新增「處理結果彙整（改進參考）」，列出該期間每筆結案的完成時間、場地、類別、客戶反映、處理結果、人員，新的在上面（最多 300 筆）；`/api/reports/summary` 新增 `resolutions`、`resolutionCount`。CSV：案件匯出最後多一欄「處理結果」，事件匯出最後多一欄「備註」（完成事件的處理結果）。
+- 沒驗證：手機上的小視窗版面。

@@ -374,6 +374,7 @@
         '<div class="req-meta"><span class="age-tag">報修 ' + formatDateTime(r.createdAt) + '（' + elapsedText(r.createdAt) + '）</span>' +
         (r.acceptedBy ? '<span class="age-tag">接單：' + esc(r.acceptedBy) + '</span>' : '') +
         (r.status === 'done' && r.resolvedBy ? '<span class="age-tag">完成：' + esc(r.resolvedBy) + '</span>' : '') +
+        (r.status === 'done' && r.resolutionNote ? '<span class="age-tag res-tag">處理結果：' + esc(r.resolutionNote) + '</span>' : '') +
         (r.status === 'done' ? '<span class="age-tag">結案 ' + formatDateTime(r.updatedAt) + '　·　耗時 ' + durationText(r.createdAt, r.updatedAt) + '</span>' : '') +
         '</div>' +
       '</div>' +
@@ -453,6 +454,51 @@
     '</div>';
   }
 
+  // ---- "mark done" dialog: what was done, kept with the request ----
+  var resolveModal = null;   // { id, title, text, err, busy, caret }
+  var RESOLVE_QUICK = ['已現場處理完成', '已更換或補充物品', '已通知相關單位處理', '客戶自行解決', '無法重現／未發現問題'];
+  function renderResolveModal() {
+    var m = resolveModal;
+    return '<div class="modal-overlay"><div class="modal modal--form">' +
+      '<h3>標記完成：' + esc(m.title) + '</h3>' +
+      '<p class="modal-help">請簡單寫下處理結果（做了什麼、原因），會留作日後改進的紀錄。</p>' +
+      '<div class="chips">' + RESOLVE_QUICK.map(function (t) { return '<button type="button" class="chip" data-action="resolve-chip" data-text="' + esc(t) + '">' + esc(t) + '</button>'; }).join('') + '</div>' +
+      '<textarea id="resolve-text" rows="4" maxlength="300" placeholder="例如：地面飲料已擦乾，補放止滑告示牌">' + esc(m.text) + '</textarea>' +
+      '<div class="modal-meta"><span class="modal-err" id="resolve-err">' + esc(m.err) + '</span><span id="resolve-count">' + m.text.length + ' / 300</span></div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn" data-action="resolve-cancel"' + (m.busy ? ' disabled' : '') + '>取消</button>' +
+        '<button type="button" class="btn btn--accent" id="resolve-confirm" data-action="resolve-confirm"' + (m.busy || !m.text.trim() ? ' disabled' : '') + '>確認完成</button>' +
+      '</div>' +
+    '</div></div>';
+  }
+  function setupResolveModal() {
+    var ta = document.getElementById('resolve-text');
+    if (!ta) return;
+    ta.focus();
+    var c = resolveModal.caret == null ? ta.value.length : resolveModal.caret;
+    try { ta.setSelectionRange(c, c); } catch (e) {}
+    ta.addEventListener('input', function () {
+      resolveModal.text = ta.value;
+      resolveModal.caret = ta.selectionStart;
+      var b = document.getElementById('resolve-confirm'); if (b) b.disabled = resolveModal.busy || !ta.value.trim();
+      var n = document.getElementById('resolve-count'); if (n) n.textContent = ta.value.length + ' / 300';
+    });
+  }
+  function submitResolution() {
+    var m = resolveModal;
+    if (!m || m.busy) return;
+    var text = m.text.trim();
+    if (!text) { m.err = '請填寫處理結果'; renderStaff(); return; }
+    m.busy = true; m.err = '';
+    renderStaff();
+    api('PATCH', '/api/requests/' + encodeURIComponent(m.id), { status: 'done', actor: staffName, resolution: text }).then(function (s) {
+      resolveModal = null;
+      applyState(s);
+    }).catch(function (err) {
+      if (resolveModal) { resolveModal.busy = false; resolveModal.err = err.message || '操作失敗，請稍後再試'; renderStaff(); }
+    });
+  }
+
   function renderQrModal() {
     var r = qrModalRoom;
     return '<div class="modal-overlay"><div class="modal">' +
@@ -508,7 +554,25 @@
         if (nameInput0) nameInput0.focus();
         return;
       }
+      if (to === 'done') {   // closing: ask what was done first (kept as a record for later improvement reviews)
+        var rq = state.requests.filter(function (x) { return x.id === id; })[0];
+        resolveModal = { id: id, title: rq ? rq.roomName + '（' + (rq.categoryLabel || rq.category) + '）' : '', text: '', err: '', busy: false };
+        renderStaff();
+        return;
+      }
       mutate(api('PATCH', '/api/requests/' + encodeURIComponent(id), { status: to, actor: staffName }));
+    } else if (action === 'resolve-chip') {
+      if (resolveModal) {
+        var add = el.getAttribute('data-text');
+        resolveModal.text = (resolveModal.text ? resolveModal.text.replace(/[\s，,；;]+$/, '') + '；' : '') + add;
+        resolveModal.caret = resolveModal.text.length;
+        renderStaff();
+      }
+    } else if (action === 'resolve-cancel') {
+      resolveModal = null;
+      renderStaff();
+    } else if (action === 'resolve-confirm') {
+      submitResolution();
     } else if (action === 'rename-venue') {
       mutate(api('PATCH', '/api/venue', { name: el.value.trim().slice(0, 60) || '活動場地' }));
     } else if (action === 'service-start' || action === 'service-end') {
@@ -621,7 +685,8 @@
         '<div class="list">' + cards + '</div>' +
         (settingsOpen ? renderSettings() : '') +
       '</div>' +
-      (qrModalRoom ? renderQrModal() : '');
+      (qrModalRoom ? renderQrModal() : '') +
+      (resolveModal ? renderResolveModal() : '');
 
     app.querySelectorAll('.tab').forEach(function (btn) {
       btn.addEventListener('click', function () { activeTab = btn.getAttribute('data-tab'); renderStaff(); });
@@ -654,6 +719,7 @@
       el.addEventListener('change', function () { handleStaffAction(el); });
     });
     if (qrModalRoom) setupQr(qrModalRoom);
+    if (resolveModal) setupResolveModal();
     setSyncIndicator();
   }
 

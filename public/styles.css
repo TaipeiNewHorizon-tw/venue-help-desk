@@ -139,3 +139,15 @@ h1,h2,h3{text-wrap:balance;margin:0;}
   .req-card{flex-wrap:wrap;}
   .req-actions{width:100%;}
 }
+.modal--form{max-width:460px;text-align:left;}
+.modal--form h3{margin:0 0 4px;}
+.modal-help{margin:0 0 10px;color:var(--ink-soft);font-size:.85rem;}
+.modal--form .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.modal--form .chip{border:1px solid var(--line,#ddd);background:var(--surface);border-radius:999px;padding:5px 11px;font:inherit;font-size:.8rem;cursor:pointer;color:inherit;}
+.modal--form .chip:hover{border-color:var(--accent,#2d5a62);}
+.modal--form textarea{width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--line,#ddd);border-radius:10px;resize:vertical;min-height:90px;}
+.modal-meta{display:flex;justify-content:space-between;gap:10px;font-size:.78rem;color:var(--ink-soft);margin-top:4px;min-height:1.2em;}
+.modal-err{color:#c0392b;}
+.modal--form .modal-actions{justify-content:flex-end;}
+.res-tag{display:block;margin-top:4px;white-space:normal;}
+.tbl-res td.res{white-space:pre-wrap;min-width:14em;}

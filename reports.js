@@ -140,6 +140,14 @@ function buildSummary(requests, range, opts) {
     byWeekday: byWeekday,
     byDay: byDay,
     byStaff: byStaff,
+    // every closing note, newest first: the material for "what should we improve" reviews
+    resolutions: requests.filter(function (r) { return r.status === 'done' && r.resolutionNote; })
+      .sort(function (a, b) { return (b.resolvedAt || 0) - (a.resolvedAt || 0); })
+      .slice(0, 300)
+      .map(function (r) {
+        return { id: r.id, at: r.resolvedAt, createdAt: r.createdAt, room: r.roomName, category: r.categoryLabel, note: r.note, resolution: r.resolutionNote, by: r.resolvedBy };
+      }),
+    resolutionCount: requests.filter(function (r) { return r.status === 'done' && r.resolutionNote; }).length,
   };
 }
 
@@ -163,7 +171,7 @@ const EVENT_ZH = { created: '送出', accepted: '接單', resolved: '完成', re
 
 function requestsCsv(requests) {
   const headers = ['案件編號', '建立時間(臺北)', '場地', '場地代碼', '類別', '類別代碼', '備註', '狀態', '接單時間', '接單人員', '完成時間', '完成人員',
-    '重新開啟次數', '接單等待秒數', '處理秒數', '總耗時秒數', '通行碼編號'];
+    '重新開啟次數', '接單等待秒數', '處理秒數', '總耗時秒數', '通行碼編號', '處理結果'];
   const rows = requests.map(function (r) {
     return [
       r.id, fmtTaipei(r.createdAt), r.roomName, r.roomId, r.categoryLabel, r.category, r.note, STATUS_ZH[r.status] || r.status,
@@ -173,6 +181,7 @@ function requestsCsv(requests) {
       r.status === 'done' && r.acceptedAt != null && r.resolvedAt != null && r.resolvedAt >= r.acceptedAt ? secs(r.acceptedAt, r.resolvedAt) : null,
       r.status === 'done' && r.resolvedAt != null ? secs(r.createdAt, r.resolvedAt) : null,
       r.passId,
+      r.status === 'done' ? r.resolutionNote : null,
     ];
   });
   return toCsv(headers, rows);
@@ -180,10 +189,10 @@ function requestsCsv(requests) {
 
 // events: rows from store.queryEvents (snake_case columns + room_name / category_label of the request)
 function eventsCsv(events) {
-  const headers = ['事件編號', '案件編號', '時間(臺北)', '事件', '人員', '前狀態', '後狀態', '場地', '類別'];
+  const headers = ['事件編號', '案件編號', '時間(臺北)', '事件', '人員', '前狀態', '後狀態', '場地', '類別', '備註'];
   const rows = events.map(function (e) {
     return [e.id, e.request_id, fmtTaipei(e.at), EVENT_ZH[e.type] || e.type, e.actor, STATUS_ZH[e.from_status] || e.from_status,
-      STATUS_ZH[e.to_status] || e.to_status, e.room_name, e.category_label];
+      STATUS_ZH[e.to_status] || e.to_status, e.room_name, e.category_label, e.detail];
   });
   return toCsv(headers, rows);
 }
