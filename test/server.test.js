@@ -321,3 +321,39 @@ test('reports API: staff only, summary, filters, validation, CSV export', async 
     await stop(srv);
   }
 });
+
+test('venue rooms: the 14 venues are seeded (ids kept), names come from the fixed list, no duplicates, metrics show where help is needed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-rooms-'));
+  seedConfig(dir);                                     // two placeholder rooms: 場地 1, 場地 2
+  const srv = await startServer(dir);
+  try {
+    const cookie = await login(srv.base);
+    const get = async () => (await (await fetch(srv.base + '/api/state', { headers: { Cookie: cookie } })).json());
+    let st = await get();
+    const names = st.rooms.map(r => r.name);
+    assert.equal(st.rooms.length, 14);
+    assert.deepEqual(names.slice(0, 3), ['601會議室', '602會議室', '603會議室']);   // placeholders renamed in place
+    assert.equal(st.rooms[0].id, 'room-1');                                          // ids (printed QR codes) unchanged
+    assert.ok(names.includes('F廳') && names.includes('608會議室'));
+
+    const patch = (id, name) => fetch(srv.base + '/api/rooms/' + id, { method: 'PATCH', headers: Object.assign({ Cookie: cookie }, json), body: JSON.stringify({ name }) });
+    assert.equal((await patch('room-1', '605-6')).status, 400);                     // not in the list
+    assert.equal((await patch('room-1', '602會議室')).status, 409);                  // already used by another room
+    assert.equal((await patch('room-1', '601會議室')).status, 200);                  // same name again is fine
+    const add = (name) => fetch(srv.base + '/api/rooms', { method: 'POST', headers: Object.assign({ Cookie: cookie }, json), body: JSON.stringify({ name }) });
+    assert.equal((await add('9樓')).status, 400);
+    assert.equal((await add('A廳')).status, 409);
+
+    // a customer asks for help in 場地 → the metrics say which venue and which category (no note)
+    const room = st.rooms.find(r => r.name === 'B廳');
+    const r = await fetch(srv.base + '/api/requests', { method: 'POST', headers: json, body: JSON.stringify({ roomId: room.id, category: 'sound', note: '私人備註' }) });
+    assert.equal(r.status, 200);
+    const m = await (await fetch(srv.base + '/api/metrics', { headers: { Authorization: 'Bearer ' + TOKEN } })).json();
+    assert.equal(m.active.length, 1);
+    assert.equal(m.active[0].room, 'B廳');
+    assert.equal(m.active[0].category, '音響');
+    assert.ok(!JSON.stringify(m).includes('私人備註'));
+  } finally {
+    await stop(srv);
+  }
+});
