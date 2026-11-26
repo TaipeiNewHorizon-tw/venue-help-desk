@@ -61,6 +61,10 @@
   var alertMuted = false;
   try { alertMuted = localStorage.getItem('vhd_muted') === '1'; } catch (e) {}
   var audioCtx = null;
+  // On-duty person's name, typed once per browser and sent with every accept/complete action.
+  // Honour system (the dashboard has one shared password), used only to attribute work in reports.
+  var staffName = '';
+  try { staffName = localStorage.getItem('vhd_staff_name') || ''; } catch (e) {}
   var baseTitle = document.title;
   var titleFlashTimer = null;
   var titleFlashOn = false;
@@ -342,6 +346,8 @@
         '<div class="req-top"><span class="room-name">' + esc(r.roomName) + '</span><span class="pill pill--' + r.status + '">' + STATUS_LABEL[r.status] + '</span></div>' +
         '<div style="color:var(--ink-soft);font-size:.88rem;margin-top:2px;">' + esc(r.categoryLabel || r.category) + (r.note ? '　·　' + esc(r.note) : '') + '</div>' +
         '<div class="req-meta"><span class="age-tag">報修 ' + formatDateTime(r.createdAt) + '（' + elapsedText(r.createdAt) + '）</span>' +
+        (r.acceptedBy ? '<span class="age-tag">接單：' + esc(r.acceptedBy) + '</span>' : '') +
+        (r.status === 'done' && r.resolvedBy ? '<span class="age-tag">完成：' + esc(r.resolvedBy) + '</span>' : '') +
         (r.status === 'done' ? '<span class="age-tag">結案 ' + formatDateTime(r.updatedAt) + '　·　耗時 ' + durationText(r.createdAt, r.updatedAt) + '</span>' : '') +
         '</div>' +
       '</div>' +
@@ -446,7 +452,13 @@
     var action = el.getAttribute('data-action') || el.getAttribute('data-onchange');
     if (action === 'advance') {
       var id = el.getAttribute('data-id'), to = el.getAttribute('data-to');
-      mutate(api('PATCH', '/api/requests/' + encodeURIComponent(id), { status: to }));
+      if (!staffName) {
+        showToast('請先在右上角輸入「值班人員」姓名');
+        var nameInput0 = document.getElementById('staff-name');
+        if (nameInput0) nameInput0.focus();
+        return;
+      }
+      mutate(api('PATCH', '/api/requests/' + encodeURIComponent(id), { status: to, actor: staffName }));
     } else if (action === 'rename-venue') {
       mutate(api('PATCH', '/api/venue', { name: el.value.trim().slice(0, 60) || '活動場地' }));
     } else if (action === 'service-start' || action === 'service-end') {
@@ -509,6 +521,9 @@
   }
 
   function renderStaff() {
+    // the whole dashboard is redrawn on every update: keep the name box focused while someone types in it
+    var nameBox = document.activeElement && document.activeElement.id === 'staff-name' ? document.activeElement : null;
+    var nameCaret = nameBox ? nameBox.selectionStart : 0;
     var all = state.requests;
     var pending = all.filter(function (r) { return r.status === 'pending'; });
     var inProgress = all.filter(function (r) { return r.status === 'in_progress'; });
@@ -540,6 +555,7 @@
           '<div class="brand"><span class="brand-eyebrow">場地協助儀表板</span><span class="brand-name">' + esc(state.venueName) + '</span></div>' +
           '<div style="display:flex;align-items:center;gap:14px;">' +
             '<div class="sync"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
+            '<label style="font-size:.82rem;color:var(--ink-soft);display:flex;align-items:center;gap:6px;">值班人員<input id="staff-name" value="' + esc(staffName) + '" placeholder="請輸入姓名" maxlength="40" style="width:110px;"></label>' +
             '<button type="button" class="btn" id="mute-toggle" title="開著這個分頁時，有新的求助會播提示音、分頁標題閃爍">' + (alertMuted ? '🔕 提醒已關閉' : '🔔 提醒已開啟') + '</button>' +
             '<button type="button" class="btn settings-toggle" id="settings-toggle">場地設定</button>' +
             '<button type="button" class="btn btn--ghost" id="logout-btn">登出</button>' +
@@ -561,6 +577,14 @@
     });
     var st = document.getElementById('settings-toggle');
     if (st) st.addEventListener('click', function () { settingsOpen = !settingsOpen; renderStaff(); });
+    var sn = document.getElementById('staff-name');
+    if (sn) {
+      sn.addEventListener('input', function () {
+        staffName = sn.value.trim().slice(0, 40);
+        try { localStorage.setItem('vhd_staff_name', staffName); } catch (e) {}
+      });
+      if (nameBox) { sn.focus(); try { sn.setSelectionRange(nameCaret, nameCaret); } catch (e) {} }
+    }
     var lo = document.getElementById('logout-btn');
     if (lo) lo.addEventListener('click', function () {
       api('POST', '/api/logout').then(function () { location.reload(); }).catch(function () { location.reload(); });
