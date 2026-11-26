@@ -191,6 +191,13 @@ function openStore(dataDir) {
     return open.concat(done).map(toRequest);
   }
 
+  function categoryStats(now, days) {
+    const since = now - days * DAY;
+    const rows = db.prepare('SELECT category_label AS category, COUNT(*) AS count FROM requests WHERE created_at >= ? GROUP BY category_label ORDER BY count DESC, category ASC LIMIT 8').all(since);
+    const total = db.prepare('SELECT COUNT(*) AS n FROM requests WHERE created_at >= ?').get(since).n;
+    return { days, total, items: rows.map(function (r) { return { category: r.category, count: r.count }; }) };
+  }
+
   // Counters for the aggregate dashboard (tnh-hub). "Today" = Taipei calendar day.
   function metrics(now) {
     const start = taipeiDayStartMs(now), end = start + DAY;
@@ -209,6 +216,8 @@ function openStore(dataDir) {
       active: unresolved.map(function (r) {
         return { room: r.room_name, category: r.category_label, status: r.status, age_sec: Math.max(0, Math.round((now - r.created_at) / 1000)) };
       }),
+      // what kinds of problems come up most (last 30 days, by category name only; never the customer's note)
+      category_stats: categoryStats(now, 30),
     };
   }
 

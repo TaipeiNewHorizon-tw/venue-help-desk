@@ -109,6 +109,12 @@ test('metrics: counts today (Taipei), open statuses and ages of unresolved reque
   assert.deepEqual(m.active[0], { room: '場地 1', category: '音響', status: 'pending', age_sec: Math.round((now - yesterday) / 1000) });
   assert.deepEqual(m.active.map(a => a.status), ['pending', 'pending', 'in_progress']);
   assert.ok(!JSON.stringify(m.active).includes('note'));
+  // category statistics: last 30 days, counted by category, no notes
+  assert.equal(m.category_stats.days, 30);
+  assert.equal(m.category_stats.total, 4);
+  assert.equal(m.category_stats.items.reduce((n, i) => n + i.count, 0), 4);
+  assert.ok(m.category_stats.items.every((i) => typeof i.category === 'string' && i.count > 0));
+  assert.ok(!JSON.stringify(m.category_stats).includes('note'));
   s.close();
 });
 

@@ -99,3 +99,6 @@ ode:sqlite 的正常警告。部署方式仍是手動（見上方「自動部署
 - 場地名稱不再自由輸入，改成下拉選單，只能選這 14 個：601會議室～608會議室、A廳～F廳（`server.js` 的 `VENUE_ROOMS`，`public/app.js` 有一份相同的，**兩邊要一起改**）。後端 `POST/PATCH /api/rooms` 會驗證：不在清單回 400、與別的場地重名回 409。
 - 啟動時 `seedVenueRooms` 會補齊 14 個場地：名稱還是「場地 N」的預留場地依序改名（id 不變，已印的 QR code 照常可用），不夠再新增；已被人改過名字的場地不動（下拉會顯示「舊名稱，請改選」）。
 - `/api/metrics` 新增 `active`：每一件未解決案件的 `{room, category, status, age_sec}`（場地名、問題類別、狀態、等待秒數），給營運總表的六樓平面圖閃爍用。**只有類別，沒有客戶填的備註**。
+
+## `/api/metrics` 新增 `category_stats`（2026-11-26，已測試，尚未部署）
+- `category_stats: {days: 30, total, items: [{category, count}]}`：近 30 天各問題類別（用案件當時的類別名稱）的件數，由多到少，最多 8 類。沒有備註、場地等內容。給營運總表「常見問題統計」用，計算在 `store.js` 的 `categoryStats()`。
