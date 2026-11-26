@@ -22,7 +22,8 @@ PORT=3000 npm start      # Windows PowerShell：$env:PORT=3000; npm start
 
 ## 部署（Railway）
 - 必須新增 Volume 並掛載到 `/data`（專案設定 → Volumes），否則每次重新部署，場地清單與求助紀錄都會清空。程式會自動讀 Railway 提供的 `RAILWAY_VOLUME_MOUNT_PATH`；沒有就退回容器內 `data/`（不會保留）。
-- **自動部署尚未設定**：push 到 GitHub 不會觸發 Railway。修法：在 Railway 專案連接 GitHub repo（安裝 Railway 的 GitHub App）、指定 main 分支。
+- **自動部署：已確認有**（2026-11-26 用 Railway 查證，更正先前「尚未設定」的說法）：Railway 專案 `venue-help-desk`、服務 `web` 連到 `TaipeiNewHorizon-tw/venue-help-desk`，最近一次部署的 commit 就是 `main` 的 `7764f3e`。**所以合併到 `main` 會直接部署到正式環境**。網址 `web-production-21718.up.railway.app`；Volume `state-data` 掛在 `/data`（5000 MB）。
+- 2026-11-26 已在該服務設定環境變數 `STAFF_PASSWORD`、`METRICS_TOKEN`（以不重新部署的方式設定，會在下一次部署生效；值只在 Railway，不在 repo）。合併分支前這兩個必須已存在，否則儀表板會鎖死。
 - 環境變數名稱：`PORT`、`DATA_DIR`（選用，預設 `./data`）、`RAILWAY_VOLUME_MOUNT_PATH`（Railway 自動提供）、`STAFF_PASSWORD`（新增，儀表板密碼，必填）。
 - 上線網址：待補（請從 Railway 專案取得）。
 
