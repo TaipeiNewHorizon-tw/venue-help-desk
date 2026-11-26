@@ -405,7 +405,7 @@
     }).join('');
     var sh = state.serviceHours || { start: '08:00', end: '23:59' };
     return '<div class="card settings-panel">' +
-      '<h2>場地設定</h2>' +
+      '<h2>場地服務QR-CODE設定</h2>' +
       '<p class="settings-sub">為每個場地產生專屬連結／QR code，張貼於場地內供客戶掃描求助。</p>' +
       '<div style="margin:10px 0 4px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);">' +
         '<b>每日 QR code（有日期、時段的）</b>' +
@@ -591,7 +591,8 @@
             '<div class="sync"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
             '<label style="font-size:.82rem;color:var(--ink-soft);display:flex;align-items:center;gap:6px;">值班人員<input id="staff-name" value="' + esc(staffName) + '" placeholder="請輸入姓名" maxlength="40" style="width:110px;"></label>' +
             '<button type="button" class="btn" id="mute-toggle" title="開著這個分頁時，有新的求助會播提示音、分頁標題閃爍">' + (alertMuted ? '🔕 提醒已關閉' : '🔔 提醒已開啟') + '</button>' +
-            '<button type="button" class="btn settings-toggle" id="settings-toggle">場地設定</button>' +
+            '<a class="btn" href="/reports.html" style="text-decoration:none;color:inherit;">報表</a>' +
+            '<button type="button" class="btn settings-toggle" id="settings-toggle">場地服務QR-CODE設定</button>' +
             '<button type="button" class="btn btn--ghost" id="logout-btn">登出</button>' +
           '</div>' +
         '</div>' +

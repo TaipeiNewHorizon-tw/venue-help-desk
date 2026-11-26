@@ -49,6 +49,7 @@ function toRequest(r) {
     resolvedAt: r.resolved_at,
     resolvedBy: r.resolved_by,
     reopenCount: r.reopen_count,
+    passId: r.pass_id || null,
   };
 }
 
@@ -282,6 +283,36 @@ function openStore(dataDir) {
     return created;
   }
 
+  // ---- reports ---------------------------------------------------------------------------
+  // Requests created in [fromMs, toMs), optionally for one room and/or one category (by id).
+  function filterSql(roomId, categoryId, params) {
+    let sql = '';
+    if (roomId) { sql += ' AND r.room_id = ?'; params.push(roomId); }
+    if (categoryId) { sql += ' AND r.category_id = ?'; params.push(categoryId); }
+    return sql;
+  }
+  function queryRequests(fromMs, toMs, roomId, categoryId) {
+    const params = [fromMs, toMs];
+    const sql = 'SELECT r.* FROM requests r WHERE r.created_at >= ? AND r.created_at < ?' + filterSql(roomId, categoryId, params) +
+      ' ORDER BY r.created_at ASC, r.id ASC';
+    return db.prepare(sql).all(...params).map(toRequest);
+  }
+  // Events of the requests created in the range (so an export of a period is self-contained).
+  function queryEvents(fromMs, toMs, roomId, categoryId) {
+    const params = [fromMs, toMs];
+    const sql = 'SELECT e.id, e.request_id, e.at, e.type, e.actor, e.from_status, e.to_status, r.room_name, r.category_label ' +
+      'FROM request_events e JOIN requests r ON r.id = e.request_id WHERE r.created_at >= ? AND r.created_at < ?' +
+      filterSql(roomId, categoryId, params) + ' ORDER BY e.at ASC, e.id ASC';
+    return db.prepare(sql).all(...params).map(function (e) { return Object.assign({}, e); });
+  }
+  // Every room / category that ever received a request (including deleted ones), newest name.
+  function listFilters() {
+    const rooms = db.prepare('SELECT room_id AS id, room_name AS name, MAX(created_at) AS last FROM requests GROUP BY room_id ORDER BY name').all();
+    const cats = db.prepare('SELECT category_id AS id, category_label AS name, MAX(created_at) AS last FROM requests GROUP BY category_id ORDER BY name').all();
+    const plain = function (x) { return { id: x.id, name: x.name }; };
+    return { rooms: rooms.map(plain), categories: cats.map(plain) };
+  }
+
   // ---- QR passes -------------------------------------------------------------------------
   const insertPass = db.prepare(
     'INSERT INTO qr_passes (id, room_id, room_name, valid_from, valid_until, created_at, created_by, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
@@ -319,7 +350,7 @@ function openStore(dataDir) {
 
   return {
     db, dbFile, createRequest, changeStatus, loadLive, metrics, counts, importLegacy, ensureDailySnapshot,
-    createPasses, getPass, listPasses, revokePass, close,
+    createPasses, getPass, listPasses, revokePass, queryRequests, queryEvents, listFilters, close,
   };
 }
 

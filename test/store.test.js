@@ -235,3 +235,31 @@ test('requests remember which pass they came through, and an old database is upg
   s.close();
   assert.doesNotThrow(function () { openStore(dir).close(); });    // opening twice is fine (column already there)
 });
+
+test('report queries: date range, room/category filters, events follow their request, filter lists include deleted rooms', () => {
+  const s = openStore(tmpDir());
+  const day = 86400000, d0 = Date.UTC(2026, 10, 20, 0, 0, 0);
+  s.createRequest(sample('in1', d0 + 1000));
+  s.createRequest(sample('in2', d0 + day + 1000, { roomId: 'room-2', roomName: '場地 2', category: 'net', categoryLabel: '網路' }));
+  s.createRequest(sample('late', d0 + 5 * day));
+  s.createRequest(sample('early', d0 - 5 * day, { roomId: 'gone', roomName: '已刪除的場地' }));
+  s.changeStatus('in2', 'in_progress', 'A', d0 + day + 5000);
+
+  const ids = (list) => list.map(r => r.id);
+  assert.deepEqual(ids(s.queryRequests(d0, d0 + 2 * day)), ['in1', 'in2']);              // [from, to)
+  assert.deepEqual(ids(s.queryRequests(d0, d0 + day + 1000)), ['in1']);                   // end is exclusive
+  assert.deepEqual(ids(s.queryRequests(d0 - 10 * day, d0 + 10 * day, 'room-2')), ['in2']);
+  assert.deepEqual(ids(s.queryRequests(d0 - 10 * day, d0 + 10 * day, null, 'net')), ['in2']);
+  assert.deepEqual(ids(s.queryRequests(d0 - 10 * day, d0 + 10 * day, 'room-2', 'sound')), []);
+  assert.equal(s.queryRequests(d0, d0 + 2 * day)[1].acceptedBy, 'A');
+
+  const ev = s.queryEvents(d0, d0 + 2 * day);
+  assert.deepEqual(ev.map(e => e.request_id + ':' + e.type), ['in1:created', 'in2:created', 'in2:accepted']);
+  assert.equal(ev[2].room_name, '場地 2');
+  assert.equal(s.queryEvents(d0, d0 + 2 * day, 'room-2').length, 2);
+
+  const f = s.listFilters();
+  assert.deepEqual(f.rooms.map(r => r.id).sort(), ['gone', 'room-1', 'room-2']);          // includes the deleted room
+  assert.deepEqual(f.categories.map(c => c.id).sort(), ['net', 'sound']);
+  s.close();
+});

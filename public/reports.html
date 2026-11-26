@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>報表｜場地協助中心</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .rp { max-width: 1040px; margin: 0 auto; padding: 18px 16px 60px; }
+  .rp h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .rp .sub { color: var(--ink-soft); font-size: .9rem; margin: 0 0 14px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 1rem; margin: 0 0 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .row > label { display: flex; flex-direction: column; gap: 4px; font-size: .84rem; color: var(--ink-soft); }
+  .row input, .row select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--paper); color: var(--ink); min-width: 130px; }
+  .quick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  a.btn { text-decoration: none; color: inherit; display: inline-block; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .kpi b { display: block; font-size: 1.6rem; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: .8rem; color: var(--ink-soft); }
+  .kpi small { display: block; font-size: .74rem; color: var(--ink-faint); margin-top: 2px; }
+  .note { background: var(--warn-soft); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font-size: .86rem; margin-bottom: 14px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* vertical bar charts (days, hours, weekdays) */
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 150px; border-bottom: 1px solid var(--border); padding-top: 6px; }
+  .bars .col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+  .bars .bar { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 0; }
+  .bars .bar.peak { background: var(--warn); }
+  .bars .val { font-size: .66rem; color: var(--ink-soft); height: 14px; line-height: 14px; }
+  .labels { display: flex; gap: 3px; margin-top: 3px; }
+  /* only every Nth label has text, so it may spill over its (empty) neighbours; centred on its bar */
+  .labels span { flex: 1 1 0; min-width: 0; display: flex; justify-content: center; font-size: .66rem; color: var(--ink-faint); white-space: nowrap; overflow: visible; }
+  /* horizontal bars (categories) */
+  .hbar { display: grid; grid-template-columns: 7em 1fr auto; gap: 8px; align-items: center; margin: 6px 0; font-size: .88rem; }
+  .hbar .track { background: var(--surface-2); border-radius: 6px; height: 16px; overflow: hidden; }
+  .hbar .fill { background: var(--accent); height: 100%; }
+  .hbar .n { font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: .82rem; white-space: nowrap; }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  table.tbl th, table.tbl td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--border); }
+  table.tbl td.num, table.tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--ink-faint); padding: 10px 0; font-size: .9rem; }
+  .err { color: var(--critical); font-size: .9rem; margin: 8px 0; }
+</style>
+</head>
+<body>
+<div class="rp">
+  <h1>報表</h1>
+  <p class="sub">依日期、場地、類別看求助的數量、時段與回應速度，並可匯出 CSV。<a href="/">← 回儀表板</a>　<a href="/qr.html">QR code</a></p>
+
+  <div id="gate" class="panel" hidden></div>
+
+  <div id="main" hidden>
+    <div class="panel">
+      <div class="row">
+        <label>開始日期<input type="date" id="f-from"></label>
+        <label>結束日期<input type="date" id="f-to"></label>
+        <label>場地<select id="f-room"><option value="">全部場地</option></select></label>
+        <label>類別<select id="f-cat"><option value="">全部類別</option></select></label>
+      </div>
+      <div class="quick">
+        <button type="button" class="btn" data-range="today">今天</button>
+        <button type="button" class="btn" data-range="7">近 7 天</button>
+        <button type="button" class="btn" data-range="30">近 30 天</button>
+        <button type="button" class="btn" data-range="month">本月</button>
+        <button type="button" class="btn" data-range="lastmonth">上個月</button>
+        <span style="flex:1"></span>
+        <a class="btn btn--accent" id="x-requests" href="#" download>匯出案件 CSV</a>
+        <a class="btn" id="x-events" href="#" download>匯出事件 CSV</a>
+      </div>
+      <div class="err" id="err" hidden></div>
+    </div>
+
+    <div id="content"></div>
+  </div>
+</div>
+<script src="/reports.js"></script>
+</body>
+</html>
