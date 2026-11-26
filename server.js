@@ -183,6 +183,27 @@ function prune() {
   state.requests = others.concat(keptDone);
 }
  
+// --- rate limit for customer help requests (in memory: resets on restart, per instance) ---
+function positiveInt(v, fallback) { const n = parseInt(v, 10); return n > 0 ? n : fallback; }
+const RATE_WINDOW_MS = positiveInt(process.env.RATE_LIMIT_WINDOW_MIN, 10) * 60 * 1000;
+const RATE_ROOM_MAX = positiveInt(process.env.RATE_LIMIT_ROOM_MAX, 5);   // requests per room per window
+const RATE_IP_MAX = positiveInt(process.env.RATE_LIMIT_IP_MAX, 30);      // requests per IP per window
+const roomHits = new Map();
+const ipHits = new Map();
+
+function recentHits(map, key) {
+  const cutoff = Date.now() - RATE_WINDOW_MS;
+  const list = (map.get(key) || []).filter(function (t) { return t > cutoff; });
+  if (list.length) map.set(key, list); else map.delete(key);
+  return list;
+}
+function rateLimitAllows(map, key, max) { return recentHits(map, key).length < max; }
+function rateLimitRecord(map, key) {
+  const list = recentHits(map, key);
+  list.push(Date.now());
+  map.set(key, list);
+}
+
 function uid(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -391,7 +412,16 @@ app.post('/api/requests', function (req, res) {
   if (!cat) return res.status(400).json({ error: '問題類別不正確' });
   const note = String(body.note || '').trim().slice(0, 300);
   if (cat.requireNote && !note) return res.status(400).json({ error: '請簡述問題內容' });
- 
+
+  // Anti-flood: this endpoint is public. Limit per room (so one person spamming
+  // doesn't affect other rooms) and, more loosely, per IP (guests at a venue often
+  // share one Wi-Fi/IP, so the IP cap is much higher than the room cap).
+  if (!rateLimitAllows(roomHits, room.id, RATE_ROOM_MAX) || !rateLimitAllows(ipHits, req.ip, RATE_IP_MAX)) {
+    return res.status(429).json({ error: '送出太頻繁了，請稍候幾分鐘再試；如有緊急狀況請直接聯絡工作人員' });
+  }
+  rateLimitRecord(roomHits, room.id);
+  rateLimitRecord(ipHits, req.ip);
+
   const now = Date.now();
   const request = {
     id: uid('req'),
