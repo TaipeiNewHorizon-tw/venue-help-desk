@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>產生與列印 QR code｜場地協助中心</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .qr-page { max-width: 980px; margin: 0 auto; padding: 18px 16px 60px; }
+  .qr-page h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .qr-page .sub { color: var(--ink-soft); font-size: .9rem; margin: 0 0 16px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 1.02rem; margin: 0 0 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .row > label { display: flex; flex-direction: column; gap: 4px; font-size: .84rem; color: var(--ink-soft); }
+  .row input[type=date], .row input[type=time], .row input[type=number] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--paper); color: var(--ink); }
+  .quick { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 12px 0; }
+  .rooms label { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: .92rem; cursor: pointer; }
+  .msg { font-size: .9rem; margin-top: 10px; min-height: 1.2em; }
+  .msg.err { color: var(--critical); }
+  .msg.ok { color: var(--good); }
+  table.passes { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  table.passes th, table.passes td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .78rem; background: var(--surface-2); color: var(--ink-soft); }
+  .tag.active { background: var(--good-soft); color: var(--good); }
+  .tag.not_started { background: var(--warn-soft); color: var(--warn); }
+  .tag.expired, .tag.revoked { background: var(--surface-2); color: var(--ink-faint); }
+  .warn { background: var(--warn-soft); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: .88rem; margin-top: 10px; }
+
+  /* ---- the printed cards ---- */
+  .sheet { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .qr-card { border: 2px solid #222; border-radius: 14px; padding: 18px 16px 14px; text-align: center; background: #fff; color: #111; break-inside: avoid; page-break-inside: avoid; }
+  .qr-card .venue { font-size: .85rem; color: #555; letter-spacing: .08em; }
+  .qr-card .room { font-size: 1.9rem; font-weight: 900; margin: 2px 0 6px; line-height: 1.2; }
+  .qr-card .when { font-size: 1.05rem; font-weight: 700; }
+  .qr-card .when small { display: block; font-weight: 500; font-size: .9rem; color: #333; margin-top: 2px; }
+  .qr-card .code { display: flex; justify-content: center; margin: 12px 0 8px; }
+  .qr-card .code img, .qr-card .code canvas { max-width: 100%; }
+  .qr-card .ask { font-size: 1rem; font-weight: 700; }
+  .qr-card .foot { font-size: .74rem; color: #666; margin-top: 8px; }
+
+  @media print {
+    body { background: #fff !important; }
+    .no-print { display: none !important; }
+    .qr-page { padding: 0; max-width: none; }
+    .sheet { gap: 8mm; }
+    .qr-card { border-width: 1.5px; }
+    @page { size: A4 portrait; margin: 10mm; }
+  }
+  @media (max-width: 640px) { .sheet { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="qr-page">
+  <div class="no-print">
+    <h1>產生與列印 QR code</h1>
+    <p class="sub">每張 QR code 對應「一個場地＋一段使用時間」，印在上面的日期時段之外掃描會看到說明、無法送出求助。<a href="/">← 回儀表板</a></p>
+  </div>
+
+  <div id="gate" class="panel no-print" hidden></div>
+
+  <div id="main" hidden>
+    <div class="panel no-print">
+      <h2>1. 使用日期與時段</h2>
+      <div class="row">
+        <label>使用日期<input type="date" id="f-date"></label>
+        <label>開始時間<input type="time" id="f-start"></label>
+        <label>結束時間<input type="time" id="f-end"></label>
+        <label>連續天數<input type="number" id="f-days" min="1" max="14" value="1" style="width:90px"></label>
+      </div>
+      <div class="quick">
+        <button type="button" class="btn" id="q-tomorrow">明天（下班前列印）</button>
+        <button type="button" class="btn" id="q-today">今天，從現在起（臨時）</button>
+      </div>
+      <p class="sub" style="margin-top:10px">連續天數大於 1 時，有效期間是「第一天開始時間」到「最後一天結束時間」（中間不中斷）。客戶仍受「服務時段」限制。</p>
+    </div>
+
+    <div class="panel no-print">
+      <h2>2. 要印哪些場地</h2>
+      <div><button type="button" class="btn" id="r-all">全選</button> <button type="button" class="btn" id="r-none">全不選</button></div>
+      <div class="rooms" id="rooms"></div>
+      <button type="button" class="btn btn--accent" id="go">產生 QR code</button>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="panel" id="preview-panel" hidden>
+      <div class="no-print" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <h2 style="margin:0">3. 列印預覽</h2>
+        <div><button type="button" class="btn btn--accent" id="print">列印（A4，每頁 2 張）</button></div>
+      </div>
+      <div class="sheet" id="sheet"></div>
+    </div>
+
+    <div class="panel no-print">
+      <h2>已產生的 QR code（今天以後，及兩天內結束的）</h2>
+      <div id="passes-empty" class="sub">載入中…</div>
+      <table class="passes" id="passes" hidden>
+        <thead><tr><th>場地</th><th>有效期間</th><th>狀態</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="panel no-print">
+      <h2>只接受有日期的 QR code</h2>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="require-pass" style="margin-top:4px">
+        <span>啟用後，<b>現場原本印好的舊 QR code（沒有日期的）會立刻失效</b>，客戶只能用這個頁面產生、在有效時段內的 QR code。</span>
+      </label>
+      <div class="warn" id="require-warn" hidden>目前<b>尚未啟用</b>：舊的 QR code 仍然有效，離場的人還是可以用。請確認現場都換成新印的 QR code 之後再啟用。</div>
+      <div class="msg" id="require-msg"></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/qr.js"></script>
+</body>
+</html>

@@ -55,6 +55,17 @@
   var connected = false;
   var needLogin = false; // staff view without a valid session shows the login form
   var roomParam = new URLSearchParams(location.search).get('room');
+  // Dated QR codes open the customer page as /?p=<id>; the server looks up the room (and the time window) from the id.
+  var passParam = new URLSearchParams(location.search).get('p');
+  var customerMode = !!(roomParam || passParam);
+  var blocked = null; // { code, message, validFrom } when the QR code is not usable (expired, not started yet, revoked...)
+  var PASS_TEXT = {
+    pass_required: '請掃描現場最新的 QR code，或聯絡工作人員',
+    pass_invalid: '無法辨識此 QR code，請掃描現場最新的 QR code，或聯絡工作人員',
+    pass_revoked: '此 QR code 已停用，請掃描現場最新的 QR code，或聯絡工作人員',
+    pass_expired: '此 QR code 已過期，請掃描現場最新的 QR code，或聯絡工作人員',
+    pass_not_started: '此 QR code 尚未到使用時間'
+  };
 
   // ---- new-request alert (sound / tab-title flash) for the staff dashboard ----
   var lastPendingIds = null; // null = not yet initialised; first sync just sets the baseline, never alerts
@@ -164,7 +175,10 @@
       }
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (e) {
-          throw new Error(e.error || ('發生錯誤 (' + res.status + ')'));
+          var err = new Error(e.error || ('發生錯誤 (' + res.status + ')'));
+          err.code = e.code;
+          err.validFrom = e.validFrom;
+          throw err;
         });
       }
       return res.json();
@@ -237,6 +251,11 @@
   function currentView() {
     var params = new URLSearchParams(location.search);
     var roomId = params.get('room');
+    if (customerMode && blocked) return { type: 'blocked' };
+    if (passParam) {
+      // the public state of a pass contains exactly one room: the one the pass is for
+      return state.rooms.length ? { type: 'client', room: state.rooms[0] } : { type: 'invalid' };
+    }
     if (roomId) {
       var room = state.rooms.find(function (r) { return r.id === roomId; });
       return room ? { type: 'client', room: room } : { type: 'invalid' };
@@ -313,7 +332,9 @@
       if (pickedCat && pickedCat.requireNote && !note) { showToast('請簡述問題內容'); return; }
       submitting = true;
       renderClient(room);
-      api('POST', '/api/requests', { roomId: room.id, category: selectedCategory, note: note })
+      api('POST', '/api/requests', passParam
+        ? { p: passParam, category: selectedCategory, note: note }
+        : { roomId: room.id, category: selectedCategory, note: note })
         .then(function (s) {
           selectedCategory = null;
           submitting = false;
@@ -322,6 +343,11 @@
         })
         .catch(function (err) {
           submitting = false;
+          if (err.code && /^pass_/.test(err.code)) {   // the QR code stopped being valid while the page was open
+            blocked = { code: err.code, message: err.message, validFrom: err.validFrom };
+            render();
+            return;
+          }
           renderClient(room);
           showToast(err.message || '送出失敗，請稍後再試');
         });
@@ -381,6 +407,14 @@
     return '<div class="card settings-panel">' +
       '<h2>場地設定</h2>' +
       '<p class="settings-sub">為每個場地產生專屬連結／QR code，張貼於場地內供客戶掃描求助。</p>' +
+      '<div style="margin:10px 0 4px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);">' +
+        '<b>每日 QR code（有日期、時段的）</b>' +
+        '<p style="margin:4px 0 8px;font-size:.84rem;color:var(--ink-soft);">下班前列印隔天要用的場地 QR code，或臨時產生今天的；過了印在上面的時段就會失效。' +
+          (state.qrRequirePass
+            ? '目前<b>只接受有日期的 QR code</b>，下方舊的場地連結與 QR code 已經失效。'
+            : '目前仍接受舊的場地 QR code（沒有日期的，離場的人也能用）。') + '</p>' +
+        '<a class="btn btn--accent" href="/qr.html">產生／列印 QR code</a>' +
+      '</div>' +
       '<label class="field-label">園區／場地總稱</label>' +
       '<input value="' + esc(state.venueName) + '" data-onchange="rename-venue" style="max-width:280px;">' +
       '<label class="field-label">求助服務時段(超過此時段，求助頁面暫停送出，避免舊連結在租借結束後仍被誤用)</label>' +
@@ -629,11 +663,28 @@
     pwd.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
   }
 
+  function fmtTaipei(ts) {
+    return new Date(ts).toLocaleString('zh-TW', {
+      timeZone: 'Asia/Taipei', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function renderBlocked() {
+    var msg = blocked.message || PASS_TEXT[blocked.code] || PASS_TEXT.pass_invalid;
+    var extra = '';
+    if (blocked.code === 'pass_not_started' && blocked.validFrom) {
+      extra = '<p style="margin-top:8px;">這張 QR code 從 <b>' + esc(fmtTaipei(blocked.validFrom)) + '</b> 起可以使用。</p>';
+    }
+    app.innerHTML = '<div class="invalid-wrap"><div><h1 style="font-size:1.3rem;margin-bottom:8px;">目前無法使用這張 QR code</h1><p>' + esc(msg) + '</p>' + extra +
+      '<p style="margin-top:12px;color:var(--ink-faint);font-size:.85rem;">如有緊急狀況，請直接聯絡現場工作人員。</p></div></div>';
+  }
+
   function render() {
-    if (!roomParam && needLogin) return renderLogin();
+    if (!customerMode && needLogin) return renderLogin();
     var view = currentView();
     if (view.type === 'client') renderClient(view.room);
     else if (view.type === 'staff') renderStaff();
+    else if (view.type === 'blocked') renderBlocked();
     else {
       app.innerHTML = '<div class="invalid-wrap"><div><h1 style="font-size:1.3rem;margin-bottom:8px;">找不到此場地連結</h1><p>請確認連結是否正確，或聯絡工作人員協助。</p></div></div>';
     }
@@ -642,17 +693,26 @@
   function boot() {
     // Customers (?room=…) load only their own room's public data; staff load
     // the full state, which requires login.
-    var url = roomParam ? '/api/public?room=' + encodeURIComponent(roomParam) : '/api/state';
+    var url = passParam ? '/api/public?p=' + encodeURIComponent(passParam)
+      : roomParam ? '/api/public?room=' + encodeURIComponent(roomParam) : '/api/state';
     fetch(url).then(function (r) {
-      if (r.status === 401 || r.status === 503) {
+      if (!customerMode && (r.status === 401 || r.status === 503)) {
         needLogin = true;
         render();
         return null;
       }
+      if (customerMode && r.status === 403) {
+        // QR code expired / not started yet / revoked / plain link no longer accepted
+        return r.json().catch(function () { return {}; }).then(function (b) {
+          blocked = { code: b.code, message: b.error, validFrom: b.validFrom };
+          render();
+          return null;
+        });
+      }
       return r.ok ? r.json() : null;
     }).then(function (s) {
       if (s) { state = s; render(); startSocket(); }
-      else if (!needLogin) render(); // unknown room → "invalid link" page
+      else if (!needLogin && !blocked) render(); // unknown room → "invalid link" page
     }).catch(function () {
       render();
       showToast('無法連線到伺服器，請稍後重新整理');
@@ -665,11 +725,18 @@
 
   function startSocket() {
     if (!window.io) return;
-    var socket = roomParam ? window.io({ query: { room: roomParam } }) : window.io();
+    var socket = passParam ? window.io({ query: { p: passParam } })
+      : roomParam ? window.io({ query: { room: roomParam } }) : window.io();
     socket.on('connect', function () { connected = true; setSyncIndicator(); });
     socket.on('disconnect', function () { connected = false; setSyncIndicator(); });
     socket.on('state', function (s) { applyState(s); });
     socket.on('auth-required', function () { needLogin = true; render(); });
+    // the QR code's time window ended (or it was revoked) while this page was open
+    socket.on('pass-denied', function (d) {
+      blocked = { code: d && d.code, message: PASS_TEXT[d && d.code] };
+      socket.disconnect();
+      render();
+    });
   }
 
   boot();

@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { openStore } = require('./store');
+const { openStore, passStatus, PASS_ID_RE } = require('./store');
 
 const PORT = process.env.PORT || 3000;
 // Point RAILWAY_VOLUME_MOUNT_PATH (or DATA_DIR) at a Railway Volume so data
@@ -39,6 +39,7 @@ function defaultState() {
     requests: [],
     serviceHours: { start: '08:00', end: '23:59' },
     categories: defaultCategories(),
+    qrRequirePass: false, // true = customers must come in through a dated QR pass; plain ?room= links stop working
   };
 }
  
@@ -53,6 +54,7 @@ function loadState() {
       if (!Array.isArray(parsed.categories) || !parsed.categories.length) {
         parsed.categories = defaultCategories();
       }
+      if (typeof parsed.qrRequirePass !== 'boolean') parsed.qrRequirePass = false;
       return parsed;
     }
   } catch (e) {
@@ -253,6 +255,40 @@ function publicState(roomId) {
   };
 }
 
+// --- QR passes: a printed QR code is `/?p=<10-char id>`; the id maps to one room and a time window. ---
+const PASS_MESSAGES = {
+  pass_required: '請掃描現場最新的 QR code，或聯絡工作人員',
+  pass_invalid: '無法辨識此 QR code，請掃描現場最新的 QR code，或聯絡工作人員',
+  pass_revoked: '此 QR code 已停用，請掃描現場最新的 QR code，或聯絡工作人員',
+  pass_expired: '此 QR code 已過期，請掃描現場最新的 QR code，或聯絡工作人員',
+  pass_not_started: '此 QR code 尚未到使用時間',
+};
+
+// How a customer reaches a room: through a pass (p) or, while passes are not required, a plain room id.
+// -> { ok: true, room, pass|null }  or  { ok: false, code, pass? }  or  { ok: false, notFound: true }
+function customerAccess(p, roomId, now) {
+  if (p) {
+    const id = String(p).toUpperCase();
+    const pass = PASS_ID_RE.test(id) ? store.getPass(id) : null;
+    if (!pass) return { ok: false, code: 'pass_invalid' };
+    const st = passStatus(pass, now);
+    if (st !== 'active') return { ok: false, code: 'pass_' + st, pass: pass };
+    const room = state.rooms.find(function (r) { return r.id === pass.roomId; });
+    if (!room) return { ok: false, code: 'pass_invalid' }; // the room was deleted after the pass was printed
+    return { ok: true, room: room, pass: pass };
+  }
+  if (state.qrRequirePass) return { ok: false, code: 'pass_required' };
+  const room = state.rooms.find(function (r) { return r.id === roomId; });
+  if (!room) return { ok: false, notFound: true };
+  return { ok: true, room: room, pass: null };
+}
+
+function passDenied(res, a) {
+  const body = { error: PASS_MESSAGES[a.code], code: a.code };
+  if (a.code === 'pass_not_started' && a.pass) body.validFrom = a.pass.validFrom; // tell the customer when it opens
+  return res.status(403).json(body);
+}
+
 const app = express();
 app.set('trust proxy', 1); // behind Railway's proxy: correct client IP and https detection
 app.use(express.json({ limit: '64kb' }));
@@ -269,12 +305,17 @@ function broadcast() {
 }
 
 io.on('connection', function (socket) {
-  const roomId = socket.handshake.query && socket.handshake.query.room;
-  if (roomId) {
-    const pub = publicState(String(roomId));
-    if (!pub) return socket.disconnect(true);
-    socket.join('room:' + pub.rooms[0].id);
-    return socket.emit('state', pub);
+  const q = socket.handshake.query || {};
+  if (q.p || q.room) {
+    const a = customerAccess(q.p, q.room, Date.now());
+    if (!a.ok) {
+      socket.emit('pass-denied', { code: a.code || 'pass_invalid' });
+      return socket.disconnect(true);
+    }
+    socket.data.passId = a.pass ? a.pass.id : null;   // remembered so we can cut the connection when the pass ends
+    socket.data.legacyRoom = !a.pass;
+    socket.join('room:' + a.room.id);
+    return socket.emit('state', publicState(a.room.id));
   }
   if (isStaffCookie(socket.handshake.headers.cookie)) {
     socket.join('staff');
@@ -283,6 +324,25 @@ io.on('connection', function (socket) {
   socket.emit('auth-required');
   socket.disconnect(true);
 });
+
+// Cut off customer pages whose pass has ended or been revoked (the server also re-checks the pass on every
+// submit, this just makes the page notice quickly instead of waiting for the next failed submit).
+function dropCustomerSockets(shouldDrop) {
+  io.sockets.sockets.forEach(function (s) {
+    const verdict = shouldDrop(s.data || {});
+    if (verdict) { s.emit('pass-denied', { code: verdict }); s.disconnect(true); }
+  });
+}
+setInterval(function () {
+  const now = Date.now();
+  dropCustomerSockets(function (d) {
+    if (!d.passId) return null;
+    const p = store.getPass(d.passId);
+    if (!p) return 'pass_invalid';
+    const st = passStatus(p, now);
+    return st === 'active' ? null : 'pass_' + st;
+  });
+}, 60 * 1000).unref();
 
 app.post('/api/login', function (req, res) {
   if (!STAFF_PASSWORD) return res.status(503).json({ error: '伺服器尚未設定 STAFF_PASSWORD，儀表板已鎖定' });
@@ -346,17 +406,70 @@ app.get('/healthz', function (req, res) {
   }
 });
 
-// Customer room page data.
+// Customer room page data: by pass (?p=) or, while passes are not required, by room id (?room=).
 app.get('/api/public', function (req, res) {
-  const pub = publicState(String(req.query.room || ''));
-  if (!pub) return res.status(404).json({ error: '找不到此場地' });
+  const a = customerAccess(req.query.p, String(req.query.room || ''), Date.now());
+  if (!a.ok) {
+    if (a.notFound) return res.status(404).json({ error: '找不到此場地' });
+    return passDenied(res, a);
+  }
+  const pub = publicState(a.room.id);
+  if (a.pass) pub.pass = { validFrom: a.pass.validFrom, validUntil: a.pass.validUntil };
   res.json(pub);
+});
+
+// ---- QR passes (staff) ----
+const MAX_PASS_SPAN_MS = 14 * DAY;
+const MAX_PASSES_PER_CALL = 60;
+function withStatus(p) { return Object.assign({}, p, { status: passStatus(p, Date.now()) }); }
+
+// Passes that are current, upcoming, or ended within the last 2 days (for reprinting / revoking).
+app.get('/api/passes', requireStaff, function (req, res) {
+  res.json({ passes: store.listPasses(Date.now(), 2 * DAY).map(withStatus) });
+});
+
+// body: { roomIds: [...], validFrom: ms, validUntil: ms, actor }. One new pass per room, same window.
+app.post('/api/passes', requireStaff, function (req, res) {
+  const body = req.body || {};
+  const now = Date.now();
+  const ids = Array.isArray(body.roomIds) ? Array.from(new Set(body.roomIds.map(String))) : [];
+  if (!ids.length) return res.status(400).json({ error: '請至少選擇一個場地' });
+  if (ids.length > MAX_PASSES_PER_CALL) return res.status(400).json({ error: '一次最多產生 ' + MAX_PASSES_PER_CALL + ' 張' });
+  const rooms = ids.map(function (id) { return state.rooms.find(function (r) { return r.id === id; }); });
+  if (rooms.some(function (r) { return !r; })) return res.status(400).json({ error: '有場地不存在，請重新整理頁面' });
+  const from = Number(body.validFrom), until = Number(body.validUntil);
+  if (!Number.isFinite(from) || !Number.isFinite(until)) return res.status(400).json({ error: '請輸入有效的起訖時間' });
+  if (until <= from) return res.status(400).json({ error: '結束時間必須晚於開始時間' });
+  if (until <= now) return res.status(400).json({ error: '結束時間已經過了' });
+  if (until - from > MAX_PASS_SPAN_MS) return res.status(400).json({ error: '有效期間最長 14 天' });
+  const created = store.createPasses(rooms.map(function (r) { return { roomId: r.id, roomName: r.name }; }), from, until, body.actor, now);
+  res.json({ passes: created.map(withStatus) });
+});
+
+app.delete('/api/passes/:id', requireStaff, function (req, res) {
+  const id = String(req.params.id).toUpperCase();
+  if (!store.revokePass(id, Date.now())) return res.status(404).json({ error: '找不到這張 QR code，或已經停用' });
+  dropCustomerSockets(function (d) { return d.passId === id ? 'pass_revoked' : null; });
+  res.json({ ok: true });
+});
+
+// Turn the "dated QR code required" rule on or off. Turning it on makes every plain ?room= link stop working.
+app.patch('/api/qr-mode', requireStaff, function (req, res) {
+  state.qrRequirePass = !!(req.body && req.body.requirePass);
+  if (state.qrRequirePass) dropCustomerSockets(function (d) { return d.legacyRoom ? 'pass_required' : null; });
+  persist();
+  broadcast();
+  res.json(state);
 });
  
 app.post('/api/requests', function (req, res) {
   const body = req.body || {};
-  const room = state.rooms.find(function (r) { return r.id === body.roomId; });
-  if (!room) return res.status(400).json({ error: '找不到此場地' });
+  const access = customerAccess(body.p, body.roomId, Date.now());
+  if (!access.ok) {
+    if (access.notFound) return res.status(400).json({ error: '找不到此場地' });
+    return passDenied(res, access);
+  }
+  const room = access.room;
   if (!isWithinServiceHours()) {
     const sh = state.serviceHours || { start: '08:00', end: '23:59' };
     return res.status(403).json({ error: '目前非服務時段（開放時間 ' + sh.start + '–' + sh.end + '），請於服務時段內送出，或聯絡工作人員' });
@@ -387,6 +500,7 @@ app.post('/api/requests', function (req, res) {
     status: 'pending',
     createdAt: now,
     updatedAt: now,
+    passId: access.pass ? access.pass.id : null,
   };
   try {
     store.createRequest(request);

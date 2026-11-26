@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const DAY = 86400000;
@@ -92,12 +93,30 @@ function openStore(dataDir) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_events_unique ON request_events(request_id, type, at);
     CREATE INDEX IF NOT EXISTS idx_events_at ON request_events(at);
+
+    -- QR "passes": each printed QR code is one row = one room + the time window it works in.
+    -- The QR code only carries the random id; the room is looked up here.
+    CREATE TABLE IF NOT EXISTS qr_passes (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      valid_from INTEGER NOT NULL,
+      valid_until INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      created_by TEXT,
+      revoked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_passes_until ON qr_passes(valid_until);
   `);
+  // which pass a request came in through (null for requests made through a plain room link)
+  if (!db.prepare('PRAGMA table_info(requests)').all().some(function (c) { return c.name === 'pass_id'; })) {
+    db.exec('ALTER TABLE requests ADD COLUMN pass_id TEXT');
+  }
 
   const insertReq = db.prepare(
     'INSERT OR IGNORE INTO requests (id, room_id, room_name, category_id, category_label, category_icon, note, status, ' +
-    'created_at, accepted_at, accepted_by, resolved_at, resolved_by, reopen_count, updated_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'created_at, accepted_at, accepted_by, resolved_at, resolved_by, reopen_count, updated_at, pass_id) ' +
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertEvent = db.prepare(
     'INSERT OR IGNORE INTO request_events (request_id, at, type, actor, from_status, to_status) VALUES (?, ?, ?, ?, ?, ?)'
@@ -123,7 +142,7 @@ function openStore(dataDir) {
   function createRequest(r) {
     tx(function () {
       insertReq.run(r.id, r.roomId, r.roomName, r.category, r.categoryLabel, r.categoryIcon || 'other', r.note || '',
-        'pending', r.createdAt, null, null, null, null, 0, r.createdAt);
+        'pending', r.createdAt, null, null, null, null, 0, r.createdAt, r.passId || null);
       insertEvent.run(r.id, r.createdAt, 'created', null, null, 'pending');
     });
   }
@@ -227,7 +246,7 @@ function openStore(dataDir) {
         const updatedAt = r.updatedAt || r.createdAt;
         const res = insertReq.run(r.id, r.roomId || '', r.roomName || '', r.category || '', r.categoryLabel || r.category || '',
           r.categoryIcon || 'other', r.note || '', status, r.createdAt, null, null,
-          status === 'done' ? updatedAt : null, null, 0, updatedAt);
+          status === 'done' ? updatedAt : null, null, 0, updatedAt, null);
         if (res.changes) {
           imported += 1;
           insertEvent.run(r.id, r.createdAt, 'created', null, null, 'pending');
@@ -263,9 +282,67 @@ function openStore(dataDir) {
     return created;
   }
 
+  // ---- QR passes -------------------------------------------------------------------------
+  const insertPass = db.prepare(
+    'INSERT INTO qr_passes (id, room_id, room_name, valid_from, valid_until, created_at, created_by, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
+  );
+  function toPass(p) {
+    if (!p) return null;
+    return {
+      id: p.id, roomId: p.room_id, roomName: p.room_name, validFrom: p.valid_from, validUntil: p.valid_until,
+      createdAt: p.created_at, createdBy: p.created_by, revokedAt: p.revoked_at,
+    };
+  }
+
+  // list: [{ roomId, roomName }]; every pass gets the same window. Returns the created passes.
+  function createPasses(list, validFrom, validUntil, createdBy, now) {
+    const actor = cleanActor(createdBy);
+    return tx(function () {
+      return list.map(function (r) {
+        const id = newPassId();
+        insertPass.run(id, r.roomId, r.roomName, validFrom, validUntil, now, actor);
+        return toPass(db.prepare('SELECT * FROM qr_passes WHERE id = ?').get(id));
+      });
+    });
+  }
+  function getPass(id) { return toPass(db.prepare('SELECT * FROM qr_passes WHERE id = ?').get(String(id))); }
+  // passes that are still relevant: not yet ended (or ended less than `graceMs` ago)
+  function listPasses(now, graceMs) {
+    return db.prepare('SELECT * FROM qr_passes WHERE valid_until >= ? ORDER BY valid_from ASC, room_name ASC')
+      .all(now - (graceMs || 0)).map(toPass);
+  }
+  function revokePass(id, now) {
+    return db.prepare('UPDATE qr_passes SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(now, String(id)).changes > 0;
+  }
+
   function close() { db.close(); }
 
-  return { db, dbFile, createRequest, changeStatus, loadLive, metrics, counts, importLegacy, ensureDailySnapshot, close };
+  return {
+    db, dbFile, createRequest, changeStatus, loadLive, metrics, counts, importLegacy, ensureDailySnapshot,
+    createPasses, getPass, listPasses, revokePass, close,
+  };
 }
 
-module.exports = { openStore, taipeiDateStr, taipeiDayStartMs, cleanActor };
+// 10 random characters, no look-alikes (0/O, 1/I/L): about 8e14 combinations, so ids cannot be guessed.
+const PASS_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 31 characters
+function newPassId() {
+  let out = '';
+  while (out.length < 10) {
+    const b = crypto.randomBytes(16);
+    for (let i = 0; i < b.length && out.length < 10; i++) {
+      if (b[i] < 248) out += PASS_ALPHABET[b[i] % PASS_ALPHABET.length]; // 248 = 31*8: no modulo bias
+    }
+  }
+  return out;
+}
+const PASS_ID_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}$/;
+
+// 'active' | 'not_started' | 'expired' | 'revoked'
+function passStatus(pass, now) {
+  if (pass.revokedAt) return 'revoked';
+  if (now < pass.validFrom) return 'not_started';
+  if (now >= pass.validUntil) return 'expired';
+  return 'active';
+}
+
+module.exports = { openStore, taipeiDateStr, taipeiDayStartMs, cleanActor, newPassId, PASS_ID_RE, passStatus };

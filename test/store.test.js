@@ -182,3 +182,56 @@ test('daily snapshot: created once per Taipei day, readable, old ones pruned', (
   snap.close();
   s.close();
 });
+
+test('qr passes: ids are unguessable-looking, windows are evaluated correctly, revoke works', () => {
+  const { newPassId, PASS_ID_RE, passStatus } = require('../store');
+  const s = openStore(tmpDir());
+  const ids = new Set();
+  for (let i = 0; i < 2000; i++) { const id = newPassId(); assert.match(id, PASS_ID_RE); ids.add(id); }
+  assert.equal(ids.size, 2000);
+
+  const now = 1_000_000;
+  const made = s.createPasses([{ roomId: 'room-1', roomName: '場地 1' }, { roomId: 'room-2', roomName: '場地 2' }], now + 1000, now + 5000, ' 王小明 ', now);
+  assert.equal(made.length, 2);
+  assert.notEqual(made[0].id, made[1].id);
+  assert.equal(made[0].createdBy, '王小明');
+  const p = s.getPass(made[0].id);
+  assert.equal(p.roomId, 'room-1');
+  assert.equal(passStatus(p, now), 'not_started');
+  assert.equal(passStatus(p, now + 1000), 'active');           // from is inclusive
+  assert.equal(passStatus(p, now + 4999), 'active');
+  assert.equal(passStatus(p, now + 5000), 'expired');          // until is exclusive
+  assert.equal(s.getPass('NOPE'), null);
+
+  assert.equal(s.revokePass(p.id, now + 2000), true);
+  assert.equal(s.revokePass(p.id, now + 2500), false);          // already revoked
+  assert.equal(passStatus(s.getPass(p.id), now + 3000), 'revoked');
+  assert.equal(s.listPasses(now, 0).length, 2);
+  assert.equal(s.listPasses(now + 6000, 0).length, 0);          // both ended
+  assert.equal(s.listPasses(now + 6000, 2000).length, 2);       // ...but still inside the grace period
+  s.close();
+});
+
+test('requests remember which pass they came through, and an old database is upgraded in place', () => {
+  const dir = tmpDir();
+  // a database created by the first release: no pass_id column, no qr_passes table
+  const old = new DatabaseSync(path.join(dir, 'helpdesk.db'));
+  old.exec(`CREATE TABLE requests (
+    id TEXT PRIMARY KEY, room_id TEXT NOT NULL, room_name TEXT NOT NULL, category_id TEXT NOT NULL,
+    category_label TEXT NOT NULL, category_icon TEXT, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+    created_at INTEGER NOT NULL, accepted_at INTEGER, accepted_by TEXT, resolved_at INTEGER, resolved_by TEXT,
+    reopen_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)`);
+  old.prepare("INSERT INTO requests (id, room_id, room_name, category_id, category_label, note, status, created_at, updated_at) VALUES ('old1','room-1','場地 1','sound','音響','舊的','done',1,2)").run();
+  old.close();
+
+  const s = openStore(dir);                                       // must not throw, must keep the old row
+  assert.equal(s.counts().requests, 1);
+  s.createRequest(sample('r2', 5000, { passId: 'ABCDEFGHJK' }));
+  s.createRequest(sample('r3', 6000));
+  const get = id => s.db.prepare('SELECT pass_id FROM requests WHERE id = ?').get(id).pass_id;
+  assert.equal(get('old1'), null);
+  assert.equal(get('r2'), 'ABCDEFGHJK');
+  assert.equal(get('r3'), null);
+  s.close();
+  assert.doesNotThrow(function () { openStore(dir).close(); });    // opening twice is fine (column already there)
+});
