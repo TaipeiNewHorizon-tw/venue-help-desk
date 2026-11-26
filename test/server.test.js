@@ -165,3 +165,89 @@ test('refuses to start (instead of silently losing data) when the database canno
   const code = await new Promise(function (resolve) { child.once('exit', resolve); });
   assert.equal(code, 1);
 });
+
+test('qr passes: issue, time windows, revoke, and the "dated QR required" switch', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-pass-'));
+  seedConfig(dir);
+  const srv = await startServer(dir);
+  try {
+    const now = Date.now(), MIN = 60000, HOUR = 3600000;
+    const cookie = await login(srv.base);
+    const staff = Object.assign({ Cookie: cookie }, json);
+    const post = (p, body, headers) => fetch(srv.base + p, { method: 'POST', headers: headers || json, body: JSON.stringify(body) });
+
+    // issuing needs staff login and sane input
+    assert.equal((await post('/api/passes', { roomIds: ['room-1'], validFrom: now, validUntil: now + HOUR })).status, 401);
+    const bad = async body => (await post('/api/passes', body, staff)).status;
+    assert.equal(await bad({ roomIds: [], validFrom: now, validUntil: now + HOUR }), 400);
+    assert.equal(await bad({ roomIds: ['room-1'], validFrom: now, validUntil: now - 1 }), 400);          // ends before it starts
+    assert.equal(await bad({ roomIds: ['room-1'], validFrom: now - 2 * HOUR, validUntil: now - HOUR }), 400); // already over
+    assert.equal(await bad({ roomIds: ['room-1'], validFrom: now, validUntil: now + 15 * 24 * HOUR }), 400);  // longer than 14 days
+    assert.equal(await bad({ roomIds: ['nope'], validFrom: now, validUntil: now + HOUR }), 400);
+    assert.equal(await bad({ roomIds: ['room-1'], validFrom: 'x', validUntil: now + HOUR }), 400);
+
+    const issue = async (roomIds, from, until) => (await (await post('/api/passes', { roomIds, validFrom: from, validUntil: until, actor: '王小明' }, staff)).json()).passes;
+    const [active] = await issue(['room-1'], now - MIN, now + HOUR);
+    const [future] = await issue(['room-2'], now + HOUR, now + 2 * HOUR);
+    assert.equal(active.status, 'active');
+    assert.equal(future.status, 'not_started');
+    assert.match(active.id, /^[A-Z2-9]{10}$/);
+    // an already-ended pass (can only exist from earlier days): insert it directly
+    const db = new DatabaseSync(path.join(dir, 'helpdesk.db'));
+    db.prepare("INSERT INTO qr_passes (id, room_id, room_name, valid_from, valid_until, created_at) VALUES ('EXPAREDAAA','room-1','場地 1',?,?,?)").run(now - 3 * HOUR, now - HOUR, now - 4 * HOUR);
+
+    // what a customer sees at each stage
+    const pub = q => fetch(srv.base + '/api/public?' + q);
+    let r = await pub('p=' + active.id);
+    assert.equal(r.status, 200);
+    let body = await r.json();
+    assert.equal(body.rooms[0].id, 'room-1');
+    assert.equal(body.pass.validUntil, active.validUntil);
+    assert.equal((await pub('p=' + active.id.toLowerCase())).status, 200);          // lower-case typing is fine
+    r = await pub('p=' + future.id); body = await r.json();
+    assert.deepEqual([r.status, body.code, body.validFrom], [403, 'pass_not_started', future.validFrom]);
+    assert.ok(!JSON.stringify(body).includes('場地 2'));                              // does not reveal the room
+    r = await pub('p=EXPAREDAAA'); body = await r.json();
+    assert.deepEqual([r.status, body.code], [403, 'pass_expired']);
+    r = await pub('p=ZZZZZZZZZZ'); assert.equal((await r.json()).code, 'pass_invalid');
+    r = await pub('p=short'); assert.equal((await r.json()).code, 'pass_invalid');
+
+    // submitting: through a pass the room comes from the pass, not from the request
+    r = await post('/api/requests', { p: active.id, roomId: 'room-2', category: 'sound' });
+    assert.equal(r.status, 200);
+    assert.equal(db.prepare("SELECT room_id, pass_id FROM requests").get().room_id, 'room-1');
+    assert.equal(db.prepare("SELECT pass_id FROM requests").get().pass_id, active.id);
+    assert.equal((await post('/api/requests', { p: future.id, category: 'sound' })).status, 403);
+    assert.equal((await post('/api/requests', { p: 'EXPAREDAAA', category: 'sound' })).status, 403);
+
+    // listing
+    const listed = (await (await fetch(srv.base + '/api/passes', { headers: { Cookie: cookie } })).json()).passes;
+    assert.equal(listed.length, 3);
+    assert.equal((await fetch(srv.base + '/api/passes')).status, 401);
+
+    // while passes are optional the old room link still works; turning the switch on kills it
+    assert.equal((await pub('room=room-1')).status, 200);
+    assert.equal((await fetch(srv.base + '/api/qr-mode', { method: 'PATCH', headers: json, body: '{"requirePass":true}' })).status, 401);
+    r = await fetch(srv.base + '/api/qr-mode', { method: 'PATCH', headers: staff, body: '{"requirePass":true}' });
+    assert.equal((await r.json()).qrRequirePass, true);
+    r = await pub('room=room-1'); body = await r.json();
+    assert.deepEqual([r.status, body.code], [403, 'pass_required']);
+    r = await post('/api/requests', { roomId: 'room-1', category: 'sound' });
+    assert.equal(r.status, 403);
+    assert.equal((await post('/api/requests', { p: active.id, category: 'sound' })).status, 200); // a valid pass still works
+
+    // revoking
+    assert.equal((await fetch(srv.base + '/api/passes/' + active.id, { method: 'DELETE' })).status, 401);
+    assert.equal((await fetch(srv.base + '/api/passes/' + active.id, { method: 'DELETE', headers: { Cookie: cookie } })).status, 200);
+    r = await pub('p=' + active.id); assert.equal((await r.json()).code, 'pass_revoked');
+    assert.equal((await post('/api/requests', { p: active.id, category: 'sound' })).status, 403);
+    assert.equal((await fetch(srv.base + '/api/passes/' + active.id, { method: 'DELETE', headers: { Cookie: cookie } })).status, 404);
+
+    // switching it back off restores plain room links
+    await fetch(srv.base + '/api/qr-mode', { method: 'PATCH', headers: staff, body: '{"requirePass":false}' });
+    assert.equal((await pub('room=room-1')).status, 200);
+    db.close();
+  } finally {
+    await stop(srv);
+  }
+});
