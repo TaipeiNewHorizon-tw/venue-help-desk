@@ -110,7 +110,7 @@
     try { saved = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]'); } catch (e) {}
     $('rooms').innerHTML = state.rooms.map(function (r) {
       return '<label><input type="checkbox" value="' + esc(r.id) + '"' + (saved.indexOf(r.id) >= 0 ? ' checked' : '') + '>' + esc(r.name) + '</label>';
-    }).join('') || '<span class="sub">還沒有場地，請先到儀表板的「場地設定」新增。</span>';
+    }).join('') || '<span class="sub">還沒有場地，請先到儀表板的「場地服務QR-CODE設定」新增。</span>';
   }
   function selectedRooms() {
     return Array.prototype.slice.call($('rooms').querySelectorAll('input:checked')).map(function (i) { return i.value; });

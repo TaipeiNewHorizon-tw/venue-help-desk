@@ -251,3 +251,73 @@ test('qr passes: issue, time windows, revoke, and the "dated QR required" switch
     await stop(srv);
   }
 });
+
+test('reports API: staff only, summary, filters, validation, CSV export', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-rep-'));
+  seedConfig(dir);
+  const srv = await startServer(dir);
+  try {
+    const cookie = await login(srv.base);
+    const staff = Object.assign({ Cookie: cookie }, json);
+    const H = { Cookie: cookie };
+    const get = (p, headers) => fetch(srv.base + p, { headers: headers || H });
+
+    // two requests today (one with a formula-looking note), one accepted and resolved by a named person
+    const mk = async (room, note) => (await (await fetch(srv.base + '/api/requests', { method: 'POST', headers: json, body: JSON.stringify({ roomId: room, category: 'sound', note }) })).json()).requests.slice(-1)[0];
+    const r1 = await mk('room-1', '=HYPERLINK("http://x")');
+    await mk('room-2', '普通備註');
+    for (const [st, who] of [['in_progress', '王小明'], ['done', '李小華']]) {
+      await fetch(srv.base + '/api/requests/' + r1.id, { method: 'PATCH', headers: staff, body: JSON.stringify({ status: st, actor: who }) });
+    }
+
+    // staff only
+    for (const p of ['/api/reports/summary', '/api/reports/export.csv?type=requests']) assert.equal((await get(p, {})).status, 401);
+
+    // summary (default range = last 30 days, so today's requests are inside)
+    let r = await get('/api/reports/summary');
+    assert.equal(r.status, 200);
+    let body = await r.json();
+    assert.equal(body.summary.total, 2);
+    assert.equal(body.summary.done, 1);
+    assert.equal(body.summary.pending, 1);
+    assert.equal(body.summary.response.count, 1);
+    assert.equal(body.summary.byStaff.length, 2);
+    assert.deepEqual(body.filters.rooms.map(x => x.id).sort(), ['room-1', 'room-2']);
+    assert.equal(body.range.to.length, 10);
+
+    body = await (await get('/api/reports/summary?room=room-2')).json();
+    assert.equal(body.summary.total, 1);
+    body = await (await get('/api/reports/summary?category=nope')).json();
+    assert.equal(body.summary.total, 0);
+    body = await (await get('/api/reports/summary?from=2020-01-01&to=2020-01-31')).json();
+    assert.equal(body.summary.total, 0);                                   // a past month with no data
+    assert.equal(body.summary.byDay.length, 31);
+
+    // bad input
+    assert.equal((await get('/api/reports/summary?from=abc')).status, 400);
+    assert.equal((await get('/api/reports/summary?from=2026-12-01&to=2026-11-01')).status, 400);
+    assert.equal((await get('/api/reports/summary?from=2020-01-01&to=2026-11-26')).status, 400);   // > 366 days
+    assert.equal((await get('/api/reports/export.csv?type=hack')).status, 400);
+
+    // CSV: requests
+    r = await get('/api/reports/export.csv?type=requests');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type'), /text\/csv; charset=utf-8/);
+    assert.match(r.headers.get('content-disposition'), /^attachment; filename="helpdesk-requests-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.csv"$/);
+    let csv = Buffer.from(await r.arrayBuffer()).toString('utf8');
+    assert.equal(csv.charCodeAt(0), 0xFEFF);
+    const lines = csv.slice(1).trim().split('\r\n');
+    assert.equal(lines.length, 3);                                         // header + 2 requests
+    assert.ok(csv.includes(`"'=HYPERLINK(""http://x"")"`));               // formula neutralised
+    assert.ok(csv.includes('王小明') && csv.includes('李小華'));
+    assert.ok(csv.includes('已完成') && csv.includes('待處理'));
+
+    // CSV: events (+ filter)
+    csv = Buffer.from(await (await get('/api/reports/export.csv?type=events')).arrayBuffer()).toString('utf8');
+    assert.equal(csv.slice(1).trim().split('\r\n').length, 1 + 4);        // header + 2 created + accepted + resolved
+    csv = Buffer.from(await (await get('/api/reports/export.csv?type=events&room=room-2')).arrayBuffer()).toString('utf8');
+    assert.equal(csv.slice(1).trim().split('\r\n').length, 2);             // header + the single 'created' of room-2
+  } finally {
+    await stop(srv);
+  }
+});

@@ -7,6 +7,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { openStore, passStatus, PASS_ID_RE } = require('./store');
+const reports = require('./reports');
 
 const PORT = process.env.PORT || 3000;
 // Point RAILWAY_VOLUME_MOUNT_PATH (or DATA_DIR) at a Railway Volume so data
@@ -416,6 +417,41 @@ app.get('/api/public', function (req, res) {
   const pub = publicState(a.room.id);
   if (a.pass) pub.pass = { validFrom: a.pass.validFrom, validUntil: a.pass.validUntil };
   res.json(pub);
+});
+
+// ---- Reports and CSV export (staff) ----
+// Query: from, to (YYYY-MM-DD, Taipei days, both inclusive; default = last 30 days), room, category (ids).
+function reportParams(req, res) {
+  const r = reports.parseRange(req.query.from, req.query.to, Date.now());
+  if (r.error) { res.status(400).json({ error: r.error }); return null; }
+  r.room = String(req.query.room || '').slice(0, 80) || null;
+  r.category = String(req.query.category || '').slice(0, 80) || null;
+  return r;
+}
+
+app.get('/api/reports/summary', requireStaff, function (req, res) {
+  const p = reportParams(req, res);
+  if (!p) return;
+  const rows = store.queryRequests(p.fromMs, p.toMs, p.room, p.category);
+  res.set('Cache-Control', 'no-store');
+  res.json({ range: { from: p.from, to: p.to }, filters: store.listFilters(), summary: reports.buildSummary(rows, p) });
+});
+
+// type=requests (one row per request) or type=events (every status change)
+app.get('/api/reports/export.csv', requireStaff, function (req, res) {
+  const type = String(req.query.type || 'requests');
+  if (type !== 'requests' && type !== 'events') return res.status(400).json({ error: 'type 必須是 requests 或 events' });
+  const p = reportParams(req, res);
+  if (!p) return;
+  const csv = type === 'events'
+    ? reports.eventsCsv(store.queryEvents(p.fromMs, p.toMs, p.room, p.category))
+    : reports.requestsCsv(store.queryRequests(p.fromMs, p.toMs, p.room, p.category));
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': 'attachment; filename="helpdesk-' + type + '-' + p.from + '_' + p.to + '.csv"',
+    'Cache-Control': 'no-store',
+  });
+  res.send(csv);
 });
 
 // ---- QR passes (staff) ----
