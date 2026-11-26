@@ -274,7 +274,8 @@ function publicState(roomId) {
   return {
     venueName: state.venueName,
     rooms: [{ id: room.id, name: room.name }],
-    requests: state.requests.filter(function (r) { return r.roomId === room.id; }),
+    // customers never see staff-internal fields (the resolution note is for improvement reviews, not for them)
+    requests: state.requests.filter(function (r) { return r.roomId === room.id; }).map(function (r) { const c = Object.assign({}, r); delete c.resolutionNote; return c; }),
     serviceHours: state.serviceHours,
     categories: state.categories,
   };
@@ -581,8 +582,10 @@ app.patch('/api/requests/:id', requireStaff, function (req, res) {
   let result;
   try {
     // body.actor = the on-duty person's name typed on the dashboard (honour system, not authentication)
-    result = store.changeStatus(req.params.id, status, req.body && req.body.actor, Date.now());
+    // closing a request requires a short note of what was done (body.resolution); it is kept for later improvement reviews
+    result = store.changeStatus(req.params.id, status, req.body && req.body.actor, Date.now(), req.body && req.body.resolution, { requireResolution: true });
   } catch (e) {
+    if (e && e.code === 'RESOLUTION_REQUIRED') return res.status(400).json({ error: '請填寫處理結果' });
     console.error('[store] could not update request:', e.message);
     return res.status(500).json({ error: '伺服器暫時無法儲存，請稍後再試' });
   }

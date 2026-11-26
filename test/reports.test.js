@@ -119,13 +119,13 @@ test('requests csv: one column per header, times in Taipei, durations filled onl
   const open = req('r3', base);
   const csv = R.requestsCsv([done, legacy, open]);
   const lines = csv.slice(1).trim().split('\r\n');
-  const cols = line => line.match(/("([^"]|"")*"|[^,]*)(,|$)/g).filter(s => s !== '').length;
+  const cols = line => { let n = 1, q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === ',' && !q) n++; } return n; };   // columns, counting a trailing empty one
   assert.equal(lines.length, 4);
   assert.match(lines[1], /2026-11-25 10:00:00/);                    // 02:00 UTC = 10:00 Taipei
-  assert.match(lines[1], /,120,600,720,ABCDEFGHJK$/);
+  assert.match(lines[1], /,120,600,720,ABCDEFGHJK,$/);          // last column = resolution note (empty here)
   assert.ok(lines[1].includes(`"'=HYPERLINK(""x"")"`));
-  assert.match(lines[2], /,0,,,1800,$/);                             // legacy: no accept time -> blank wait/handling, total known
-  assert.match(lines[3], /,0,,,,$/);                                 // still open: nothing to measure
+  assert.match(lines[2], /,0,,,1800,,$/);                             // legacy: no accept time -> blank wait/handling, total known
+  assert.match(lines[3], /,0,,,,,$/);                                 // still open: nothing to measure
   assert.equal(cols(lines[1]), cols(lines[0]));
 });
 

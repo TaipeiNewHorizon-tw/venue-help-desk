@@ -98,10 +98,23 @@ test('full flow: legacy import, create, accept, resolve, metrics, backup, restar
     let st = await r.json();
     let mine = st.requests.find(q => q.id === created.id);
     assert.equal(mine.acceptedBy, '王小明');
-    r = await fetch(srv.base + '/api/requests/' + created.id, { method: 'PATCH', headers: Object.assign({ Cookie: cookie }, json), body: JSON.stringify({ status: 'done', actor: '李小華' }) });
+    // closing needs a note of what was done
+    const patch = (id, b) => fetch(srv.base + '/api/requests/' + id, { method: 'PATCH', headers: Object.assign({ Cookie: cookie }, json), body: JSON.stringify(b) });
+    r = await patch(created.id, { status: 'done', actor: '李小華' });
+    assert.equal(r.status, 400);
+    assert.equal((await r.json()).error, '請填寫處理結果');
+    assert.equal((await patch(created.id, { status: 'done', actor: '李小華', resolution: '   ' })).status, 400);
+    r = await patch(created.id, { status: 'done', actor: '李小華', resolution: '已擦乾地面並放置告示牌' });
+    assert.equal(r.status, 200);
     st = await r.json();
     mine = st.requests.find(q => q.id === created.id);
     assert.equal(mine.resolvedBy, '李小華');
+    assert.equal(mine.resolutionNote, '已擦乾地面並放置告示牌');
+    // customers never see the internal resolution note
+    const pubRes = await (await fetch(srv.base + '/api/public?room=' + mine.roomId)).json();
+    const pubReq = (pubRes.requests || []).find(q => q.id === created.id);
+    if (pubReq) assert.equal('resolutionNote' in pubReq, false);
+    assert.ok(!JSON.stringify(pubRes).includes('已擦乾地面'));
     assert.equal((await fetch(srv.base + '/api/requests/nope', { method: 'PATCH', headers: Object.assign({ Cookie: cookie }, json), body: '{"status":"done"}' })).status, 404);
 
     // metrics read from the permanent store: legacy-live (pending) + this one (done) are today/open as expected
@@ -267,7 +280,7 @@ test('reports API: staff only, summary, filters, validation, CSV export', async 
     const r1 = await mk('room-1', '=HYPERLINK("http://x")');
     await mk('room-2', '普通備註');
     for (const [st, who] of [['in_progress', '王小明'], ['done', '李小華']]) {
-      await fetch(srv.base + '/api/requests/' + r1.id, { method: 'PATCH', headers: staff, body: JSON.stringify({ status: st, actor: who }) });
+      await fetch(srv.base + '/api/requests/' + r1.id, { method: 'PATCH', headers: staff, body: JSON.stringify({ status: st, actor: who, resolution: st === 'done' ? '更換麥克風電池，=SUM(1)' : undefined }) });
     }
 
     // staff only
@@ -282,6 +295,9 @@ test('reports API: staff only, summary, filters, validation, CSV export', async 
     assert.equal(body.summary.pending, 1);
     assert.equal(body.summary.response.count, 1);
     assert.equal(body.summary.byStaff.length, 2);
+    assert.equal(body.summary.resolutionCount, 1);                          // the closing note is collected for improvement reviews
+    assert.equal(body.summary.resolutions[0].resolution, '更換麥克風電池，=SUM(1)');
+    assert.equal(body.summary.resolutions[0].by, '李小華');
     assert.deepEqual(body.filters.rooms.map(x => x.id).sort(), ['room-1', 'room-2']);
     assert.equal(body.range.to.length, 10);
 
@@ -311,6 +327,8 @@ test('reports API: staff only, summary, filters, validation, CSV export', async 
     assert.ok(csv.includes(`"'=HYPERLINK(""http://x"")"`));               // formula neutralised
     assert.ok(csv.includes('王小明') && csv.includes('李小華'));
     assert.ok(csv.includes('已完成') && csv.includes('待處理'));
+    assert.ok(csv.includes('處理結果') && csv.includes(`"'=SUM(1)`) === false);            // header present
+    assert.ok(csv.includes('更換麥克風電池') && csv.includes(`'=SUM(1)`) === false);      // the note is exported (its text does not start with '=')
 
     // CSV: events (+ filter)
     csv = Buffer.from(await (await get('/api/reports/export.csv?type=events')).arrayBuffer()).toString('utf8');

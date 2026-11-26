@@ -50,8 +50,16 @@ function toRequest(r) {
     resolvedBy: r.resolved_by,
     reopenCount: r.reopen_count,
     passId: r.pass_id || null,
+    resolutionNote: r.resolution_note || null,   // what staff did when closing it (internal: never sent to customers)
   };
 }
+
+// free text typed by staff (what was done): keep line breaks, drop other control characters, cap the length
+function cleanText(v, max) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u0009\u000b-\u001f]/g, '').trim().slice(0, max);
+  return s || null;
+}
+const RESOLUTION_MAX = 300;
 
 function openStore(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -113,18 +121,26 @@ function openStore(dataDir) {
   if (!db.prepare('PRAGMA table_info(requests)').all().some(function (c) { return c.name === 'pass_id'; })) {
     db.exec('ALTER TABLE requests ADD COLUMN pass_id TEXT');
   }
+  // what staff wrote when they marked it done; and the same text kept on the 'resolved' event so a reopen never loses it
+  if (!db.prepare('PRAGMA table_info(requests)').all().some(function (c) { return c.name === 'resolution_note'; })) {
+    db.exec('ALTER TABLE requests ADD COLUMN resolution_note TEXT');
+  }
+  if (!db.prepare('PRAGMA table_info(request_events)').all().some(function (c) { return c.name === 'detail'; })) {
+    db.exec('ALTER TABLE request_events ADD COLUMN detail TEXT');
+  }
 
   const insertReq = db.prepare(
     'INSERT OR IGNORE INTO requests (id, room_id, room_name, category_id, category_label, category_icon, note, status, ' +
     'created_at, accepted_at, accepted_by, resolved_at, resolved_by, reopen_count, updated_at, pass_id) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
-  const insertEvent = db.prepare(
-    'INSERT OR IGNORE INTO request_events (request_id, at, type, actor, from_status, to_status) VALUES (?, ?, ?, ?, ?, ?)'
+  const insertEventStmt = db.prepare(
+    'INSERT OR IGNORE INTO request_events (request_id, at, type, actor, from_status, to_status, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
+  const insertEvent = { run: function (id, at, type, actor, from, to, detail) { return insertEventStmt.run(id, at, type, actor, from, to, detail === undefined ? null : detail); } };
   const getReq = db.prepare('SELECT * FROM requests WHERE id = ?');
   const updateReq = db.prepare(
-    'UPDATE requests SET status = ?, updated_at = ?, accepted_at = ?, accepted_by = ?, resolved_at = ?, resolved_by = ?, reopen_count = ? WHERE id = ?'
+    'UPDATE requests SET status = ?, updated_at = ?, accepted_at = ?, accepted_by = ?, resolved_at = ?, resolved_by = ?, reopen_count = ?, resolution_note = ? WHERE id = ?'
   );
 
   function tx(fn) {
@@ -149,8 +165,10 @@ function openStore(dataDir) {
   }
 
   // Staff moves a request to a new status. Returns null if unknown, {changed:false} if nothing to do.
-  function changeStatus(id, to, actorRaw, now) {
+  // resolutionRaw = what was done (only used when closing); opts.requireResolution makes closing without it an error (code RESOLUTION_REQUIRED)
+  function changeStatus(id, to, actorRaw, now, resolutionRaw, opts) {
     const actor = cleanActor(actorRaw);
+    const resolution = cleanText(resolutionRaw, RESOLUTION_MAX);
     return tx(function () {
       const row = getReq.get(id);
       if (!row) return null;
@@ -160,24 +178,26 @@ function openStore(dataDir) {
       let acceptedAt = row.accepted_at, acceptedBy = row.accepted_by;
       let resolvedAt = row.resolved_at, resolvedBy = row.resolved_by;
       let reopen = row.reopen_count;
+      let resolutionNote = row.resolution_note;
 
       if (to === 'in_progress' && from === 'pending') {
         insertEvent.run(id, now, 'accepted', actor, from, to);
         if (acceptedAt == null) { acceptedAt = now; acceptedBy = actor; }
       } else if (to === 'done') {
+        if (opts && opts.requireResolution && !resolution) { const e = new Error('resolution required'); e.code = 'RESOLUTION_REQUIRED'; throw e; }
         if (acceptedAt == null) {           // closed straight from "pending": count it as accepted too
           insertEvent.run(id, now, 'accepted', actor, from, 'in_progress');
           acceptedAt = now; acceptedBy = actor;
         }
-        insertEvent.run(id, now, 'resolved', actor, from, to);
-        resolvedAt = now; resolvedBy = actor;
+        insertEvent.run(id, now, 'resolved', actor, from, to, resolution);
+        resolvedAt = now; resolvedBy = actor; resolutionNote = resolution;
       } else if (from === 'done') {         // done -> pending / in_progress
         insertEvent.run(id, now, 'reopened', actor, from, to);
         reopen += 1;
       } else {                               // in_progress -> pending
         insertEvent.run(id, now, 'reverted', actor, from, to);
       }
-      updateReq.run(to, now, acceptedAt, acceptedBy, resolvedAt, resolvedBy, reopen, id);
+      updateReq.run(to, now, acceptedAt, acceptedBy, resolvedAt, resolvedBy, reopen, resolutionNote, id);
       return { changed: true, request: toRequest(getReq.get(id)) };
     });
   }
@@ -313,7 +333,7 @@ function openStore(dataDir) {
   // Events of the requests created in the range (so an export of a period is self-contained).
   function queryEvents(fromMs, toMs, roomId, categoryId) {
     const params = [fromMs, toMs];
-    const sql = 'SELECT e.id, e.request_id, e.at, e.type, e.actor, e.from_status, e.to_status, r.room_name, r.category_label ' +
+    const sql = 'SELECT e.id, e.request_id, e.at, e.type, e.actor, e.from_status, e.to_status, e.detail, r.room_name, r.category_label ' +
       'FROM request_events e JOIN requests r ON r.id = e.request_id WHERE r.created_at >= ? AND r.created_at < ?' +
       filterSql(roomId, categoryId, params) + ' ORDER BY e.at ASC, e.id ASC';
     return db.prepare(sql).all(...params).map(function (e) { return Object.assign({}, e); });

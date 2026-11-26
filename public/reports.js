@@ -96,7 +96,22 @@
     html += '<div class="panel"><h2>人員</h2>' + staffTable(s.byStaff) +
       '<p class="sub" style="margin:8px 0 0">人員是值班人員在儀表板自己填寫的名字（不是帳號驗證）。「接單」＝第一個接下的人，「完成」＝按下完成的人。</p></div>';
 
+    html += '<div class="panel"><h2>處理結果彙整（改進參考）</h2>' + resolutionTable(s.resolutions, s.resolutionCount) + '</div>';
+
     $('content').innerHTML = html;
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return '—';
+    return new Intl.DateTimeFormat('zh-TW', { timeZone: TZ, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+  }
+  function resolutionTable(list, total) {
+    if (!list || !list.length) return '<div class="empty">這段期間還沒有處理結果紀錄。工作人員按「標記完成」時填寫的結果會彙整在這裡。</div>';
+    return '<p class="sub" style="margin:0 0 8px">工作人員結案時寫下的處理結果，新的在上面（共 ' + total + ' 筆' + (total > list.length ? '，只列最近 ' + list.length + ' 筆，完整內容請匯出 CSV' : '') + '）。</p>' +
+      '<table class="tbl tbl-res"><thead><tr><th>完成時間</th><th>場地</th><th>類別</th><th>客戶反映</th><th>處理結果</th><th>人員</th></tr></thead><tbody>' +
+      list.map(function (r) {
+        return '<tr><td>' + esc(fmtTime(r.at)) + '</td><td>' + esc(r.room) + '</td><td>' + esc(r.category) + '</td><td>' + esc(r.note || '—') + '</td><td class="res">' + esc(r.resolution) + '</td><td>' + esc(r.by || '—') + '</td></tr>';
+      }).join('') + '</tbody></table>';
   }
 
   function kpi(value, label, small) {
