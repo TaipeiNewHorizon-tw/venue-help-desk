@@ -151,3 +151,16 @@ h1,h2,h3{text-wrap:balance;margin:0;}
 .modal--form .modal-actions{justify-content:flex-end;}
 .res-tag{display:block;margin-top:4px;white-space:normal;}
 .tbl-res td.res{white-space:pre-wrap;min-width:14em;}
+
+/* ---- customer page: logo + ready line, and the "staff notified" screen after sending ---- */
+.room-logo{display:block;margin:0 auto 10px;height:auto;width:64px;}
+.room-ready{display:inline-flex;align-items:center;gap:7px;color:var(--ink-soft);font-size:.9rem;margin:8px 0 0;}
+.ready-dot{width:8px;height:8px;border-radius:50%;background:var(--good);flex:none;}
+.sent-card{margin-top:18px;padding:30px 20px 24px;border-radius:18px;text-align:center;color:#3a1d00;background:linear-gradient(180deg,#ffd9a0 0%,#ff9a3c 100%);box-shadow:0 8px 24px rgba(255,138,31,.28);animation:sentIn .35s ease-out;}
+.sent-card h2{font-size:1.45rem;font-weight:900;margin-top:12px;}
+.sent-card p{font-size:1.05rem;margin:6px 0 0;}
+.sent-check{width:64px;height:64px;margin:0 auto;border-radius:50%;background:#1d1d1d;color:#fff;display:flex;align-items:center;justify-content:center;}
+.sent-check svg{width:34px;height:34px;}
+.again-btn{margin-top:22px;width:100%;padding:12px;border:2px solid rgba(58,29,0,.45);border-radius:12px;background:rgba(255,255,255,.35);color:#3a1d00;font-weight:700;font-size:.95rem;cursor:pointer;}
+@keyframes sentIn{from{opacity:0;transform:translateY(8px) scale(.97);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion:reduce){.sent-card{animation:none;}}

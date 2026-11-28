@@ -52,6 +52,7 @@
   var activeTab = 'active';
   var qrModalRoom = null;
   var submitting = false;
+  var justSent = false;   // customer page: show the "staff notified" screen instead of the form
   var connected = false;
   var needLogin = false; // staff view without a valid session shows the login form
   var roomParam = new URLSearchParams(location.search).get('room');
@@ -310,10 +311,16 @@
         '<button type="button" class="submit-btn" id="submit-btn"' + (submitting ? ' disabled' : '') + '>' + (submitting ? '送出中…' : '送出求助') + '</button>')
       : ('<div class="banner banner--info" style="margin-top:14px;">目前非服務時段(開放時間 ' + esc(sh.start) + '–' + esc(sh.end) + '),暫時無法送出新的求助,如有緊急狀況請直接聯絡工作人員。</div>');
 
+    // shown right after a request goes out: customers are waiting now, so reassure them
+    var sentHtml = '<div class="sent-card"><div class="sent-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>' +
+      '<h2>已通知工作人員</h2><p>馬上就來，請稍候</p>' +
+      '<button type="button" class="again-btn" id="again-btn">還有其他需求？再送出一項</button></div>';
+
     app.innerHTML =
       '<div class="shell shell--narrow">' +
-        '<div class="room-head"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1><p style="color:var(--ink-soft);font-size:.9rem;margin-top:6px;">需要協助嗎？選擇項目後送出，工作人員會盡快為您服務。</p></div>' +
-        formHtml +
+        '<div class="room-head"><img class="room-logo" src="/logo.png" alt="" width="64"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1>' +
+          (justSent ? '' : '<p class="room-ready"><span class="ready-dot"></span>系統已就緒，請選擇需要的協助</p>') + '</div>' +
+        (justSent ? sentHtml : formHtml) +
         (mine.length ? '<div class="my-requests"><h2>本場地今天的請求</h2>' + myList + '</div>' : '') +
         '<div class="sync" style="justify-content:center;margin-top:22px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
       '</div>';
@@ -324,6 +331,8 @@
         renderClient(room);
       });
     });
+    var againBtn = document.getElementById('again-btn');
+    if (againBtn) againBtn.addEventListener('click', function () { justSent = false; renderClient(room); });
     var submitBtn = document.getElementById('submit-btn');
     if (submitBtn) submitBtn.addEventListener('click', function () {
       if (!selectedCategory) { showToast('請先選擇問題類別'); return; }
@@ -338,8 +347,8 @@
         .then(function (s) {
           selectedCategory = null;
           submitting = false;
+          justSent = true;
           applyState(s);
-          showToast('已送出，工作人員將盡快為您服務');
         })
         .catch(function (err) {
           submitting = false;
