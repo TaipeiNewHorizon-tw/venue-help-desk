@@ -164,3 +164,9 @@ h1,h2,h3{text-wrap:balance;margin:0;}
 .again-btn{margin-top:22px;width:100%;padding:12px;border:2px solid rgba(58,29,0,.45);border-radius:12px;background:rgba(255,255,255,.35);color:#3a1d00;font-weight:700;font-size:.95rem;cursor:pointer;}
 @keyframes sentIn{from{opacity:0;transform:translateY(8px) scale(.97);}to{opacity:1;transform:none;}}
 @media (prefers-reduced-motion:reduce){.sent-card{animation:none;}}
+/* welcome text merged into the room header (matches the printed welcome card) */
+.room-welcome{font-size:1.35rem;font-weight:900;margin:10px 0 2px;}
+.room-ready{font-weight:700;font-size:1rem;color:var(--ink);margin:10px 0 0;}
+.ready-check{width:22px;height:22px;border-radius:50%;background:#1d1d1d;color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:none;}
+.ready-check svg{width:13px;height:13px;}
+.room-lead{color:var(--ink-soft);font-size:.92rem;line-height:1.6;margin:10px 0 4px;}

@@ -318,8 +318,10 @@
 
     app.innerHTML =
       '<div class="shell shell--narrow">' +
-        '<div class="room-head"><img class="room-logo" src="/logo.png" alt="" width="64"><span class="brand-eyebrow">' + esc(state.venueName) + '</span><h1>' + esc(room.name) + '</h1>' +
-          (justSent ? '' : '<p class="room-ready"><span class="ready-dot"></span>系統已就緒，請選擇需要的協助</p>') + '</div>' +
+        '<div class="room-head"><img class="room-logo" src="/logo.png" alt="" width="64"><span class="brand-eyebrow">' + esc(state.venueName) + '</span>' +
+          (justSent ? '' : '<p class="room-welcome">歡迎使用本場地</p>') + '<h1>' + esc(room.name) + '</h1>' +
+          (justSent ? '' : '<p class="room-ready"><span class="ready-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12.5l4 4L18 8"/></svg></span>系統登錄完成</p>' +
+            '<p class="room-lead">若有任何服務需求，請選擇下方項目，<br>馬上就來</p>') + '</div>' +
         (justSent ? sentHtml : formHtml) +
         (mine.length ? '<div class="my-requests"><h2>本場地今天的請求</h2>' + myList + '</div>' : '') +
         '<div class="sync" style="justify-content:center;margin-top:22px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-label">即時同步中</span></div>' +
